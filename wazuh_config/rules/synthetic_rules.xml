@@ -1,0 +1,37 @@
+<group name="synthetic_telemetry,">
+
+  <!-- Base JSON Rule -->
+  <rule id="100000" level="3">
+    <decoded_as>synthetic_telemetry</decoded_as>
+    <description>Synthetic Telemetry Event Received.</description>
+  </rule>
+
+  <!-- High Risk Events -->
+  <rule id="100001" level="10">
+    <if_sid>100000</if_sid>
+    <field name="severity">high</field>
+    <description>High Severity Cybersecurity Event: $(event_type)</description>
+  </rule>
+
+  <!-- Critical Events -->
+  <rule id="100002" level="12">
+    <if_sid>100000</if_sid>
+    <field name="severity">critical</field>
+    <description>Critical Severity Attack Chain Detected: $(event_type)</description>
+  </rule>
+
+  <!-- Specific Alert: Outbound C2 Traffic -->
+  <rule id="100003" level="12">
+    <if_sid>100000</if_sid>
+    <field name="event_type">firewall_allow|firewall_deny</field>
+    <field name="detection.risk_level">critical|high</field>
+    <description>Malicious Firewall Access Detected - Risk Level High</description>
+  </rule>
+
+  <!-- Specific Alert: Failed Login -->
+  <rule id="100004" level="7">
+    <if_sid>100000</if_sid>
+    <field name="event_type">failed_login</field>
+    <description>Authentication Failure for user: $(user.username)</description>
+  </rule>
+</group>

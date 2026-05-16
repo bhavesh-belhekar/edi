@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   synthetic-logs:
     build:
@@ -8,14 +10,60 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
     volumes:
-      # Mount the entire active directory for interactive source development
       - ./:/app
-      # Explicit definition: Persistence for generated datasets 
-      # (Though covered by the root mount, declaring it communicates architecture cleanly)
       - ./synthetic_logs/output:/app/synthetic_logs/output
-      - ./synthetic_logs/templates:/app/synthetic_logs/templates
-    # For interactive commands (keeps terminal formatting intact)
+      - ./wazuh_logs:/app/wazuh_logs
     stdin_open: true 
     tty: true
-    # Default command does nothing, user expects to run explicit commands via 'docker compose run'
-    command: ["python", "synthetic_logs/generate_logs.py", "--help"]
+    command: ["python", "synthetic_logs/stream_logs.py", "--continuous", "--speed", "2.0"]
+
+  wazuh.indexer:
+    image: wazuh/wazuh-indexer:4.9.0
+    hostname: wazuh.indexer
+    container_name: wazuh.indexer
+    ports:
+      - "9200:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "discovery.type=single-node"
+      - "network.host=0.0.0.0"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  wazuh.manager:
+    image: wazuh/wazuh-manager:4.9.0
+    hostname: wazuh.manager
+    container_name: wazuh.manager
+    depends_on:
+      - wazuh.indexer
+    ports:
+      - "1514:1514"
+      - "1515:1515"
+      - "514:514/udp"
+      - "55000:55000"
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=admin
+    volumes:
+      - ./wazuh_logs:/var/ossec/logs/synthetic_telemetry:ro
+      - ./wazuh_config/decoders/synthetic_decoders.xml:/tmp/synthetic_decoders.xml:ro
+      - ./wazuh_config/rules/synthetic_rules.xml:/tmp/synthetic_rules.xml:ro
+      - ./wazuh_config/setup_wazuh.sh:/setup_wazuh.sh
+
+  wazuh.dashboard:
+    image: wazuh/wazuh-dashboard:4.9.0
+    hostname: wazuh.dashboard
+    container_name: wazuh.dashboard
+    depends_on:
+      - wazuh.manager
+      - wazuh.indexer
+    ports:
+      - "443:5601"
+    environment:
+      - INDEXER_URL=https://wazuh.indexer:9200
