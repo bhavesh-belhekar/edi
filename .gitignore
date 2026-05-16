@@ -1,1 +1,17 @@
+# Python Virtual Environment
 venv/
+env/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Generated Telemetry Datasets
+synthetic_logs/output/*.ndjson
+synthetic_logs/output/*.log
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
