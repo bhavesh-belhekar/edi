@@ -1,0 +1,34 @@
+[
+  {
+    "username": "jdoe",
+    "role": "employee",
+    "department": "Finance",
+    "office_hours_start": 8,
+    "office_hours_end": 17,
+    "is_admin": false
+  },
+  {
+    "username": "asmith",
+    "role": "employee",
+    "department": "HR",
+    "office_hours_start": 9,
+    "office_hours_end": 18,
+    "is_admin": false
+  },
+  {
+    "username": "root_admin",
+    "role": "administrator",
+    "department": "IT",
+    "office_hours_start": 7,
+    "office_hours_end": 16,
+    "is_admin": true
+  },
+  {
+    "username": "svc_db_backup",
+    "role": "service_account",
+    "department": "IT",
+    "office_hours_start": 0,
+    "office_hours_end": 23,
+    "is_admin": true
+  }
+]
