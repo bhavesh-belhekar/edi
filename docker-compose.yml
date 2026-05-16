@@ -18,7 +18,7 @@ services:
     command: ["python", "synthetic_logs/stream_logs.py", "--continuous", "--speed", "2.0"]
 
   wazuh.indexer:
-    image: wazuh/wazuh-indexer:4.9.0
+    image: wazuh/wazuh-indexer:4.7.5
     hostname: wazuh.indexer
     container_name: wazuh.indexer
     ports:
@@ -27,6 +27,12 @@ services:
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
       - "discovery.type=single-node"
       - "network.host=0.0.0.0"
+    volumes:
+      - ./wazuh_config/certs/root-ca.pem:/usr/share/wazuh-indexer/certs/root-ca.pem:ro
+      - ./wazuh_config/certs/indexer-key.pem:/usr/share/wazuh-indexer/certs/indexer-key.pem:ro
+      - ./wazuh_config/certs/indexer.pem:/usr/share/wazuh-indexer/certs/indexer.pem:ro
+      - ./wazuh_config/certs/admin.pem:/usr/share/wazuh-indexer/certs/admin.pem:ro
+      - ./wazuh_config/certs/admin-key.pem:/usr/share/wazuh-indexer/certs/admin-key.pem:ro
     ulimits:
       memlock:
         soft: -1
@@ -36,7 +42,7 @@ services:
         hard: 65536
 
   wazuh.manager:
-    image: wazuh/wazuh-manager:4.9.0
+    image: wazuh/wazuh-manager:4.7.5
     hostname: wazuh.manager
     container_name: wazuh.manager
     depends_on:
@@ -50,14 +56,16 @@ services:
       - INDEXER_URL=https://wazuh.indexer:9200
       - INDEXER_USERNAME=admin
       - INDEXER_PASSWORD=admin
+      - WAZUH_API_PASSWORD=admin
     volumes:
-      - ./wazuh_logs:/var/ossec/logs/synthetic_telemetry:ro
+      - ./wazuh_logs:/var/ossec/logs/synthetic_telemetry/
       - ./wazuh_config/decoders/synthetic_decoders.xml:/tmp/synthetic_decoders.xml:ro
       - ./wazuh_config/rules/synthetic_rules.xml:/tmp/synthetic_rules.xml:ro
-      - ./wazuh_config/setup_wazuh.sh:/setup_wazuh.sh
+      - ./wazuh_config/setup_wazuh.sh:/setup_wazuh.sh:ro
+      - ./wazuh_config/certs:/usr/share/wazuh-indexer/certs:ro
 
   wazuh.dashboard:
-    image: wazuh/wazuh-dashboard:4.9.0
+    image: wazuh/wazuh-dashboard:4.7.5
     hostname: wazuh.dashboard
     container_name: wazuh.dashboard
     depends_on:
@@ -67,3 +75,10 @@ services:
       - "443:5601"
     environment:
       - INDEXER_URL=https://wazuh.indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=admin
+      - WAZUH_MANAGER_URL=https://wazuh.manager:55000
+    volumes:
+      - ./wazuh_config/certs/dashboard.pem:/usr/share/wazuh-dashboard/config/certs/dashboard.pem:ro
+      - ./wazuh_config/certs/dashboard-key.pem:/usr/share/wazuh-dashboard/config/certs/dashboard-key.pem:ro
+      - ./wazuh_config/certs/root-ca.pem:/usr/share/wazuh-dashboard/config/certs/root-ca.pem:ro

@@ -1,10 +1,8 @@
-<!-- Custom Decoder for Synthetic JSON Telemetry -->
-
-<decoder name="synthetic_telemetry">
-  <prematch>{"event_id":</prematch>
+<decoder name="synthetic-json-base">
+  <prematch>"event_type"</prematch>
 </decoder>
 
-<decoder name="synthetic_telemetry_child">
-  <parent>synthetic_telemetry</parent>
+<decoder name="synthetic-json-child">
+  <parent>synthetic-json-base</parent>
   <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>
