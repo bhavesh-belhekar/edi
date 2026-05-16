@@ -1,0 +1,28 @@
+# Python caches & virtual envs
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+
+# Git
+.git/
+.gitignore
+
+# IDEs
+.vscode/
+.idea/
+
+# Node
+node_modules/
+
+# Generated outputs
+# We ignore existing NDJSON files so they don't bloat the image context
+# We will use volume mounts to access/persist them instead
+synthetic_logs/output/*.ndjson
+synthetic_logs/output/*.log

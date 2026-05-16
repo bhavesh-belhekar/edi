@@ -1,0 +1,21 @@
+services:
+  synthetic-logs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soc_telemetry_generator
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount the entire active directory for interactive source development
+      - ./:/app
+      # Explicit definition: Persistence for generated datasets 
+      # (Though covered by the root mount, declaring it communicates architecture cleanly)
+      - ./synthetic_logs/output:/app/synthetic_logs/output
+      - ./synthetic_logs/templates:/app/synthetic_logs/templates
+    # For interactive commands (keeps terminal formatting intact)
+    stdin_open: true 
+    tty: true
+    # Default command does nothing, user expects to run explicit commands via 'docker compose run'
+    command: ["python", "synthetic_logs/generate_logs.py", "--help"]
