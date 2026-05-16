@@ -119,7 +119,7 @@ class EndpointEventGenerator:
         else:
             proc = random.choice(self.processes["admin_processes"])
             event.process = ProcessInfo(name="sudo", pid=random.randint(100,999), parent_process_name="sshd", command_line=f"sudo {proc} -v")
-            event.raw_log = f"auth.log: {current_time.isoformat()} {system['hostname']} sudo:  {user['username']} : TTY=pts/1 ; PWD=/home/{user['username']} ; USER=root ; COMMAND={proc} -v"
+            event.raw_log = f"auth.log: {timestamp.isoformat()} {system['hostname']} sudo:  {user['username']} : TTY=pts/1 ; PWD=/home/{user['username']} ; USER=root ; COMMAND={proc} -v"
             
         return event
 

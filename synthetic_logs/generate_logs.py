@@ -2,211 +2,449 @@ import os
 import sys
 import argparse
 import random
+import uuid
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Any
 
 # Ensure the root project directory is in the sys.path so 'shared' module can be found
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from synthetic_logs.generators.auth_generator import AuthEventGenerator
 from synthetic_logs.generators.endpoint_generator import EndpointEventGenerator
+from synthetic_logs.generators.dns_generator import DNSEventGenerator
+from synthetic_logs.generators.firewall_generator import FirewallEventGenerator
+from synthetic_logs.generators.proxy_generator import ProxyEventGenerator
 from shared.utils import to_json_str
 from shared.logger import setup_logger
 
 logger = setup_logger("SyntheticOrchestrator")
 
-def generate_logs(count: int, format_type: str, seed: int):
+
+# ==============================================================================
+# ATTACK SCENARIO — Shared correlation context across all datasets
+# ==============================================================================
+
+@dataclass
+class AttackScenario:
     """
-    Main orchestration engine for synthetic event generation.
-    It builds a realistic temporal sequence by probabilistically picking
-    the next behavior type, advancing time realistically, and validating schemas natively.
+    Pre-generated correlation context that binds events across independent
+    telemetry datasets. Each scenario represents one multi-stage attack chain
+    observable across auth, endpoint, DNS, firewall, and proxy logs.
+    """
+    attack_chain_id: str
+    attacker_ip: str
+    target_user: Dict[str, Any]
+    target_system: Dict[str, Any]
+    start_time: datetime
+    # Collect the last event_id from each generator for cross-linking
+    last_event_ids: Dict[str, str] = field(default_factory=dict)
+
+
+# ==============================================================================
+# MAIN ORCHESTRATOR
+# ==============================================================================
+
+def generate_all_telemetry(count: int, attack_count: int, format_type: str, seed: int):
+    """
+    Main orchestration engine for multi-source synthetic telemetry generation.
+
+    Generates 5 independent datasets with shared cross-dataset correlation:
+      1. auth_dataset     — Authentication events (logins, failures, brute force)
+      2. endpoint_dataset — Endpoint telemetry (processes, files, attack chains)
+      3. dns_dataset      — DNS queries (benign, typo-squat, DGA, tunneling, C2)
+      4. firewall_dataset — Firewall logs (allow/deny, lateral movement, C2, exfil)
+      5. proxy_dataset    — Web proxy logs (browsing, downloads, phishing, C2 beacon)
     """
     if seed is not None:
         random.seed(seed)
         logger.info(f"[*] Initialized with Random Seed: {seed}")
 
+    # Initialize all generators
     auth_gen = AuthEventGenerator()
     endpoint_gen = EndpointEventGenerator()
-    
-    # Start simulation 7 days ago
-    current_time = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(days=7)
-    
-    all_events = []
-    
-    # We use probabilities to decide the next 'action block'
-    weights = [0.30, 0.40, 0.20, 0.10] # [auth_normal, endpoint_normal, attack, suspicious]
-    
-    logger.info(f"[*] Starting realistic event processing targeting {count} logs...")
-    
-    # Track statistics
-    auth_count = 0
-    endpoint_count = 0
-    attack_count = 0
-    
-    while len(all_events) < count:
-        # Step time forward by a random realistic delta
-        current_time += timedelta(minutes=random.randint(1, 60))
-        
-        choice = random.choices(["auth_normal", "endpoint_normal", "attack", "suspicious"], weights=weights)[0]
-        
-        # Pick a random user and system for this "session"
+    dns_gen = DNSEventGenerator()
+    firewall_gen = FirewallEventGenerator()
+    proxy_gen = ProxyEventGenerator()
+
+    # Simulation window: 7 days back from now
+    sim_start = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(days=7)
+
+    # Separate event collectors per telemetry source
+    auth_events = []
+    endpoint_events = []
+    dns_events = []
+    firewall_events = []
+    proxy_events = []
+
+    # ==================================================================
+    # PHASE A: Pre-generate Attack Scenarios with shared identifiers
+    # ==================================================================
+    logger.info(f"[*] Pre-generating {attack_count} cross-dataset attack scenarios...")
+
+    attack_scenarios = []
+    for _ in range(attack_count):
+        chain_id = f"attack_chain_{uuid.uuid4().hex[:8]}"
+        attacker_ip = random.choice(auth_gen.ips["known_malicious_ips"])
+        target_user = random.choice(auth_gen.users)
+        target_system = random.choice(auth_gen.systems)
+        # Spread attacks across the 7-day window
+        attack_start = sim_start + timedelta(
+            hours=random.randint(6, 160),
+            minutes=random.randint(0, 59)
+        )
+        attack_scenarios.append(AttackScenario(
+            attack_chain_id=chain_id,
+            attacker_ip=attacker_ip,
+            target_user=target_user,
+            target_system=target_system,
+            start_time=attack_start,
+        ))
+
+    # Sort attacks chronologically so timeline is consistent
+    attack_scenarios.sort(key=lambda s: s.start_time)
+
+    # ==================================================================
+    # PHASE B: Generate benign background traffic for each source
+    # ==================================================================
+    logger.info(f"[*] Generating ~{count} benign events per telemetry source...")
+
+    current_time = sim_start
+
+    # --- AUTH benign events ---
+    auth_target = count
+    while len(auth_events) < auth_target:
+        current_time += timedelta(minutes=random.randint(1, 45))
         user_dict = random.choice(auth_gen.users)
-        system_dict = random.choice(auth_gen.systems)
-        
-        if choice == "auth_normal":
-            # Auth Phase
-            auth_event = auth_gen.generate_successful_login(current_time)
-            # Force user/system match for correlation
-            auth_event.user.username = user_dict["username"]
-            auth_event.user.role = user_dict["role"]
-            auth_event.source.ip = system_dict["ip"]  # User logs in from a known IP
-            
-            all_events.append(auth_event)
-            auth_count += 1
-            
-            # Post-Auth Endpoint Phase
-            endpoint_events = endpoint_gen.generate_normal_activity(current_time, user_dict, system_dict)
-            all_events.extend(endpoint_events)
-            endpoint_count += len(endpoint_events)
-            
-        elif choice == "endpoint_normal":
-            # Generate a burst of 5-10 endpoint events representing sustained user activity
-            count_endpoint = random.randint(5, 10)
-            for _ in range(count_endpoint):
-                 endpoint_events = endpoint_gen.generate_normal_activity(current_time, user_dict, system_dict)
-                 all_events.extend(endpoint_events)
-                 endpoint_count += len(endpoint_events)
-                 current_time += timedelta(minutes=random.randint(1, 5))
-                 
-            # 15% chance admin does admin things if they are admin
-            if user_dict["role"] in ["admin", "system"] and random.random() < 0.15:
-                admin_event = endpoint_gen.generate_admin_activity(current_time, user_dict, system_dict)
-                all_events.append(admin_event)
-                endpoint_count += 1
-        
-        elif choice == "suspicious":
-            sub_choice = random.choices(["failed_login", "admin_after_hours", "unusual_ip"], weights=[0.4, 0.3, 0.3])[0]
-            if sub_choice == "failed_login":
-                event = auth_gen.generate_failed_login(current_time)
-                all_events.append(event)
-                auth_count += 1
-            elif sub_choice == "admin_after_hours":
-                event = auth_gen.generate_admin_after_hours(current_time)
-                if event: 
-                    all_events.append(event)
-                    auth_count += 1
-            elif sub_choice == "unusual_ip":
-                event = auth_gen.generate_unusual_ip_login(current_time)
-                all_events.append(event)
-                auth_count += 1
-                
-        elif choice == "attack":
-            # Brute force attack followed by successful login and attack chain
-            attack_sequence = auth_gen.generate_brute_force_attack(current_time, count=random.randint(3, 8))
-            all_events.extend(attack_sequence)
-            auth_count += len(attack_sequence)
-            
-            # Attacker succeeds and generates endpoint attacks
-            attacker_ip = attack_sequence[0].source.ip
-            
-            # Advance time slightly to simulate the breach
-            current_time += timedelta(seconds=len(attack_sequence) * 2)
-            
-            malicious_success_login = auth_gen.generate_successful_login(current_time)
-            malicious_success_login.user.username = user_dict["username"]
-            malicious_success_login.source.ip = attacker_ip
-            all_events.append(malicious_success_login)
-            auth_count += 1
-            attack_count += 1
-            
-            # Endpoint Attack Chain
-            attack_events = endpoint_gen.generate_attack_chain(current_time, user_dict, system_dict, attacker_ip)
-            all_events.extend(attack_events)
-            endpoint_count += len(attack_events)
-            attack_count += len(attack_events)
 
-    # Cutoff if we over-generated due to an attack sequence appending a bulk array
-    all_events = all_events[:count]
-    
-    logger.info(f"Generated {auth_count} Auth Events, {endpoint_count} Endpoint Events, {attack_count} Attack Events in chains")
-    
-    # Strictly sort by timestamp to ensure ML and Correlation dependencies operate perfectly
-    all_events.sort(key=lambda x: x.timestamp)
-    
-    _save_and_summarize(all_events, format_type)
+        choice = random.choices(
+            ["login", "failed", "admin_after_hours", "unusual_ip", "logout"],
+            weights=[0.50, 0.15, 0.05, 0.05, 0.25]
+        )[0]
 
-def _save_and_summarize(events, format_type):
+        if choice == "login":
+            ev = auth_gen.generate_successful_login(current_time, user_dict)
+            auth_events.append(ev)
+        elif choice == "failed":
+            ev = auth_gen.generate_failed_login(current_time, user_dict)
+            auth_events.append(ev)
+        elif choice == "admin_after_hours":
+            ev = auth_gen.generate_admin_after_hours(current_time)
+            if ev:
+                auth_events.append(ev)
+        elif choice == "unusual_ip":
+            ev = auth_gen.generate_unusual_ip_login(current_time)
+            auth_events.append(ev)
+        elif choice == "logout":
+            ev = auth_gen.generate_logout(current_time, user_dict)
+            auth_events.append(ev)
+
+    # --- ENDPOINT benign events ---
+    current_time = sim_start
+    endpoint_target = count
+    while len(endpoint_events) < endpoint_target:
+        current_time += timedelta(minutes=random.randint(1, 30))
+        user_dict = random.choice(endpoint_gen.users)
+        system_dict = random.choice(endpoint_gen.systems)
+
+        choice = random.choices(
+            ["normal", "admin"],
+            weights=[0.90, 0.10]
+        )[0]
+
+        if choice == "normal":
+            evts = endpoint_gen.generate_normal_activity(current_time, user_dict, system_dict)
+            endpoint_events.extend(evts)
+        elif choice == "admin" and user_dict.get("is_admin"):
+            ev = endpoint_gen.generate_admin_activity(current_time, user_dict, system_dict)
+            endpoint_events.append(ev)
+
+    # --- DNS benign events ---
+    current_time = sim_start
+    dns_target = count
+    while len(dns_events) < dns_target:
+        current_time += timedelta(minutes=random.randint(1, 20))
+        user_dict = random.choice(dns_gen.users)
+        system_dict = random.choice(dns_gen.systems)
+
+        choice = random.choices(
+            ["benign", "typosquat"],
+            weights=[0.92, 0.08]
+        )[0]
+
+        if choice == "benign":
+            evts = dns_gen.generate_benign_dns(current_time, user_dict, system_dict)
+            dns_events.extend(evts)
+        elif choice == "typosquat":
+            ev = dns_gen.generate_typosquat_query(current_time, user_dict, system_dict)
+            dns_events.append(ev)
+
+    # --- FIREWALL benign events ---
+    current_time = sim_start
+    fw_target = count
+    while len(firewall_events) < fw_target:
+        current_time += timedelta(minutes=random.randint(1, 15))
+        user_dict = random.choice(firewall_gen.users)
+        system_dict = random.choice(firewall_gen.systems)
+
+        choice = random.choices(
+            ["outbound", "internal", "denied"],
+            weights=[0.50, 0.35, 0.15]
+        )[0]
+
+        if choice == "outbound":
+            evts = firewall_gen.generate_normal_outbound(current_time, user_dict, system_dict)
+            firewall_events.extend(evts)
+        elif choice == "internal":
+            ev = firewall_gen.generate_normal_internal(current_time, user_dict, system_dict)
+            firewall_events.append(ev)
+        elif choice == "denied":
+            ev = firewall_gen.generate_denied_traffic(current_time, user_dict, system_dict)
+            firewall_events.append(ev)
+
+    # --- PROXY benign events ---
+    current_time = sim_start
+    proxy_target = count
+    while len(proxy_events) < proxy_target:
+        current_time += timedelta(minutes=random.randint(1, 25))
+        user_dict = random.choice(proxy_gen.users)
+        system_dict = random.choice(proxy_gen.systems)
+
+        choice = random.choices(
+            ["browsing", "update", "cloud"],
+            weights=[0.60, 0.20, 0.20]
+        )[0]
+
+        if choice == "browsing":
+            evts = proxy_gen.generate_normal_browsing(current_time, user_dict, system_dict)
+            proxy_events.extend(evts)
+        elif choice == "update":
+            ev = proxy_gen.generate_software_update(current_time, user_dict, system_dict)
+            proxy_events.append(ev)
+        elif choice == "cloud":
+            ev = proxy_gen.generate_cloud_access(current_time, user_dict, system_dict)
+            proxy_events.append(ev)
+
+    # ==================================================================
+    # PHASE C: Inject correlated attack chains across ALL datasets
+    # ==================================================================
+    logger.info(f"[*] Injecting {len(attack_scenarios)} correlated attack chains across all datasets...")
+
+    for scenario in attack_scenarios:
+        t = scenario.start_time
+        chain_id = scenario.attack_chain_id
+        user = scenario.target_user
+        system = scenario.target_system
+        attacker_ip = scenario.attacker_ip
+        prev_id = None
+
+        # --- Step 1: AUTH — Brute force + successful login ---
+        brute_events = auth_gen.generate_brute_force_attack(t, count=random.randint(3, 6))
+        for ev in brute_events:
+            ev.source.ip = attacker_ip
+            ev.user.username = user["username"]
+            ev.correlation.attack_chain_id = chain_id
+        auth_events.extend(brute_events)
+        t += timedelta(seconds=len(brute_events) * 2)
+
+        success_login = auth_gen.generate_successful_login(t, user)
+        success_login.source.ip = attacker_ip
+        success_login.source.geo = "External-Malicious"
+        success_login.severity = "critical"
+        success_login.correlation.attack_chain_id = chain_id
+        if brute_events:
+            success_login.correlation.related_events = [brute_events[-1].event_id]
+        auth_events.append(success_login)
+        prev_id = success_login.event_id
+        t += timedelta(seconds=random.randint(5, 15))
+
+        # --- Step 2: ENDPOINT — Attack chain (powershell, mimikatz, file, reverse shell) ---
+        attack_chain_events = endpoint_gen.generate_attack_chain(t, user, system, attacker_ip)
+        for ev in attack_chain_events:
+            ev.correlation.attack_chain_id = chain_id
+        if attack_chain_events:
+            attack_chain_events[0].correlation.related_events.append(prev_id)
+        endpoint_events.extend(attack_chain_events)
+
+        if attack_chain_events:
+            prev_id = attack_chain_events[-1].event_id
+            t = attack_chain_events[-1].timestamp + timedelta(seconds=random.randint(2, 10))
+
+        # --- Step 3: DNS — C2 beaconing + optional DGA/tunneling ---
+        dns_beacon_events = dns_gen.generate_malicious_beacon(t, user, system, chain_id, prev_id)
+        dns_events.extend(dns_beacon_events)
+
+        if dns_beacon_events:
+            prev_id = dns_beacon_events[-1].event_id
+            t = dns_beacon_events[-1].timestamp + timedelta(seconds=random.randint(2, 8))
+
+        # 50% chance of DGA activity
+        if random.random() < 0.5:
+            dga_events = dns_gen.generate_dga_query(t, user, system, chain_id, prev_id)
+            dns_events.extend(dga_events)
+            if dga_events:
+                prev_id = dga_events[-1].event_id
+                t = dga_events[-1].timestamp + timedelta(seconds=random.randint(2, 8))
+
+        # 40% chance of DNS tunneling
+        if random.random() < 0.4:
+            tunnel_events = dns_gen.generate_dns_tunneling(t, user, system, chain_id, prev_id)
+            dns_events.extend(tunnel_events)
+            if tunnel_events:
+                prev_id = tunnel_events[-1].event_id
+                t = tunnel_events[-1].timestamp + timedelta(seconds=random.randint(2, 8))
+
+        # --- Step 4: FIREWALL — Lateral movement + C2 outbound + exfil ---
+        lateral_events = firewall_gen.generate_lateral_movement(t, user, system, chain_id, prev_id)
+        firewall_events.extend(lateral_events)
+
+        if lateral_events:
+            prev_id = lateral_events[-1].event_id
+            t = lateral_events[-1].timestamp + timedelta(seconds=random.randint(5, 20))
+
+        c2_fw_event = firewall_gen.generate_c2_outbound(t, user, system, chain_id, prev_id)
+        firewall_events.append(c2_fw_event)
+        prev_id = c2_fw_event.event_id
+        t += timedelta(seconds=random.randint(30, 120))
+
+        exfil_event = firewall_gen.generate_data_exfil(t, user, system, chain_id, prev_id)
+        firewall_events.append(exfil_event)
+        prev_id = exfil_event.event_id
+        t += timedelta(seconds=random.randint(5, 15))
+
+        # --- Step 5: PROXY — Malicious download + C2 HTTP beacon ---
+        download_event = proxy_gen.generate_malicious_download(t, user, system, chain_id, prev_id)
+        proxy_events.append(download_event)
+        prev_id = download_event.event_id
+        t += timedelta(seconds=random.randint(10, 30))
+
+        # 60% chance of phishing access in the chain
+        if random.random() < 0.6:
+            phish_event = proxy_gen.generate_phishing_access(t, user, system, chain_id, prev_id)
+            proxy_events.append(phish_event)
+            prev_id = phish_event.event_id
+            t += timedelta(seconds=random.randint(5, 15))
+
+        c2_beacon_events = proxy_gen.generate_c2_http_beacon(t, user, system, chain_id, prev_id)
+        proxy_events.extend(c2_beacon_events)
+
+        logger.info(f"  Attack chain '{chain_id}' injected: user={user['username']}, system={system['hostname']}")
+
+    # ==================================================================
+    # PHASE D: Sort each dataset and write separate NDJSON files
+    # ==================================================================
+
+    datasets = {
+        "auth": auth_events,
+        "endpoint": endpoint_events,
+        "dns": dns_events,
+        "firewall": firewall_events,
+        "proxy": proxy_events,
+    }
+
+    # Sort each dataset independently by timestamp
+    for name, events in datasets.items():
+        events.sort(key=lambda e: e.timestamp)
+
+    # Write output
+    _write_datasets(datasets, format_type, attack_scenarios)
+
+
+def _write_datasets(datasets, format_type, attack_scenarios):
     """
-    Handles robust output management and statistical analysis of generated sequences.
+    Writes each telemetry dataset to its own NDJSON file and prints per-dataset statistics.
     """
     output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'output'))
     os.makedirs(output_dir, exist_ok=True)
-    
     timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_path = os.path.join(output_dir, f"auth_dataset_{timestamp_prefix}.{format_type}")
-    
-    logger.info(f"[*] Serializing {len(events)} events to {file_path} ...")
-    
-    # Statistical counters
-    type_counts = Counter()
-    severity_counts = Counter()
-    top_ips = Counter()
-    top_users = Counter()
-    
+
+    total_events = 0
     start_time = datetime.now()
-    
-    with open(file_path, "w") as f:
-        if format_type == "ndjson":
+
+    print("\n" + "=" * 70)
+    print("  SYNTHETIC TELEMETRY GENERATION — MULTI-SOURCE OUTPUT")
+    print("=" * 70)
+
+    for name, events in datasets.items():
+        file_name = f"{name}_dataset_{timestamp_prefix}.ndjson"
+        file_path = os.path.join(output_dir, file_name)
+
+        type_counts = Counter()
+        severity_counts = Counter()
+        attack_chain_count = 0
+
+        with open(file_path, "w") as f:
             for event in events:
                 f.write(to_json_str(event) + "\n")
-                
-                # Tracking
                 type_counts[event.event_type] += 1
                 severity_counts[event.severity] += 1
-                if event.source and event.source.ip:
-                    top_ips[event.source.ip] += 1
-                if event.user and event.user.username:
-                    top_users[event.user.username] += 1
-        elif format_type == "json":
-            json_blob = []
-            for event in events:
-                json_blob.append(to_json_str(event))
-                type_counts[event.event_type] += 1
-                severity_counts[event.severity] += 1
-                if event.source and getattr(event.source, 'ip', None):
-                    top_ips[event.source.ip] += 1
-                if event.user and getattr(event.user, 'username', None):
-                    top_users[event.user.username] += 1
-            f.write("[\n" + ",\n".join(json_blob) + "\n]")
-            
+                if event.correlation and event.correlation.attack_chain_id:
+                    attack_chain_count += 1
+
+        total_events += len(events)
+
+        print(f"\n{'─' * 60}")
+        print(f"  📄 {file_name}")
+        print(f"{'─' * 60}")
+        print(f"  Total Events       : {len(events)}")
+        print(f"  Attack-Correlated  : {attack_chain_count}")
+        print(f"  File               : {file_path}")
+        print(f"  Severity Breakdown :")
+        for sev in ["info", "warning", "medium", "high", "critical"]:
+            if sev in severity_counts:
+                print(f"    {sev:12s} : {severity_counts[sev]}")
+        print(f"  Event Types        :")
+        for etype, cnt in type_counts.most_common(8):
+            print(f"    {etype:28s} : {cnt}")
+
     elapsed = (datetime.now() - start_time).total_seconds()
 
-    print("\n====================================================")
-    print(" EXECUTION SUMMARY: SYNTHETIC DATASET GENERATION")
-    print("====================================================")
-    print(f"Total Events Generated : {len(events)}")
-    print(f"Serialization Time     : {elapsed:.2f} seconds")
-    print(f"Output File Location   : {file_path}")
-    print("\n[ SEVERITY DISTRIBUTION ]")
-    for sev, count in severity_counts.items():
-        print(f"  - {sev.upper():10s} : {count}")
-    print("\n[ EVENT TYPE DISTRIBUTION ]")
-    for etype, count in type_counts.items():
-        print(f"  - {etype:20s} : {count}")
-    print("\n[ TOP 3 USERS ]")
-    for user, count in top_users.most_common(3):
-        print(f"  - {user:20s} : {count} events")
-    print("\n[ TOP 3 SOURCE IPS (INCLUDING ATTACKERS) ]")
-    for ip, count in top_ips.most_common(3):
-        print(f"  - {ip:15s} : {count} events")
-    print("====================================================\n")
+    # Cross-dataset correlation summary
+    chain_ids = set()
+    for events in datasets.values():
+        for ev in events:
+            if ev.correlation and ev.correlation.attack_chain_id:
+                chain_ids.add(ev.correlation.attack_chain_id)
 
+    print(f"\n{'=' * 70}")
+    print(f"  GENERATION COMPLETE")
+    print(f"{'=' * 70}")
+    print(f"  Total Events (all sources) : {total_events}")
+    print(f"  Total Datasets Written     : {len(datasets)}")
+    print(f"  Serialization Time         : {elapsed:.2f}s")
+    print(f"  Attack Chains Generated    : {len(attack_scenarios)}")
+    print(f"  Unique Chain IDs           : {len(chain_ids)}")
+    print(f"  Output Directory           : {os.path.abspath(os.path.join(os.path.dirname(__file__), 'output'))}")
+
+    if chain_ids:
+        print(f"\n  Cross-Dataset Correlation IDs:")
+        for cid in sorted(chain_ids):
+            sources_with = []
+            for name, events in datasets.items():
+                if any(e.correlation and e.correlation.attack_chain_id == cid for e in events):
+                    sources_with.append(name)
+            print(f"    {cid} → [{', '.join(sources_with)}]")
+
+    print(f"{'=' * 70}\n")
+
+
+# ==============================================================================
+# CLI ENTRY POINT
+# ==============================================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Cyber Incident Response: Enterprise Synthetic Log Generator")
-    parser.add_argument("--count", type=int, default=1000, help="Total number of security events to generate")
-    parser.add_argument("--format", type=str, choices=["json", "ndjson"], default="ndjson", help="Output file serialization format")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed for deterministic dataset generation")
+    parser = argparse.ArgumentParser(
+        description="Enterprise Synthetic Telemetry Generator — Multi-Source SIEM-Compatible Output"
+    )
+    parser.add_argument("--count", type=int, default=500,
+                        help="Approximate number of benign events per telemetry source (default: 500)")
+    parser.add_argument("--attacks", type=int, default=3,
+                        help="Number of cross-dataset attack chains to inject (default: 3)")
+    parser.add_argument("--format", type=str, choices=["ndjson"], default="ndjson",
+                        help="Output format (default: ndjson)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Random seed for deterministic generation")
     args = parser.parse_args()
 
-    generate_logs(args.count, args.format, args.seed)
+    generate_all_telemetry(args.count, args.attacks, args.format, args.seed)

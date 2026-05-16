@@ -50,6 +50,26 @@ class DNSInfo(BaseModel):
     response_code: Optional[str] = Field(None, description="DNS response code (NOERROR, NXDOMAIN, SERVFAIL, etc.)")
     ttl: Optional[int] = Field(None, description="Time to live in seconds")
 
+class FirewallInfo(BaseModel):
+    action: str = Field(..., description="Firewall action (allow, deny, drop, reject)")
+    protocol: str = Field("TCP", description="Network protocol (TCP, UDP, ICMP, etc.)")
+    bytes_sent: int = Field(0, description="Bytes sent in the session")
+    bytes_received: int = Field(0, description="Bytes received in the session")
+    session_duration_ms: int = Field(0, description="Session duration in milliseconds")
+    rule_id: Optional[str] = Field(None, description="Firewall rule ID that matched")
+    direction: str = Field("outbound", description="Traffic direction (inbound, outbound, internal)")
+
+class ProxyInfo(BaseModel):
+    url: Optional[str] = Field(None, description="Full request URL")
+    method: str = Field("GET", description="HTTP method (GET, POST, PUT, DELETE, CONNECT)")
+    status_code: int = Field(200, description="HTTP response status code")
+    user_agent: Optional[str] = Field(None, description="Client User-Agent string")
+    domain: Optional[str] = Field(None, description="Target domain extracted from URL")
+    content_type: Optional[str] = Field(None, description="Response content type (text/html, application/octet-stream, etc.)")
+    bytes_transferred: int = Field(0, description="Total bytes transferred")
+    referrer: Optional[str] = Field(None, description="HTTP Referer header")
+    category: str = Field("uncategorized", description="URL category (business, social, malicious, uncategorized)")
+
 class BehavioralFeatures(BaseModel):
     login_frequency: int = Field(0, description="Logins observed within the sliding window")
     failed_attempts: int = Field(0, description="Failed attempts within the sliding window")
@@ -113,6 +133,8 @@ class SecurityEvent(BaseModel):
     http: Optional[HTTPInfo] = None
     system: Optional[SystemInfo] = None
     dns: Optional[DNSInfo] = None
+    firewall: Optional[FirewallInfo] = None
+    proxy: Optional[ProxyInfo] = None
 
     # Analytical State Blocks (Auto-instantiated with defaults)
     behavioral_features: BehavioralFeatures = Field(default_factory=BehavioralFeatures)
