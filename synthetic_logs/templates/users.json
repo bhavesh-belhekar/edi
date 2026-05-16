@@ -1,34 +1,42 @@
 [
   {
-    "username": "jdoe",
+    "username": "jdoe_finance",
     "role": "employee",
     "department": "Finance",
+    "privilege_level": "standard",
     "office_hours_start": 8,
     "office_hours_end": 17,
-    "is_admin": false
+    "is_admin": false,
+    "expected_systems": ["finance-app-01", "corp-workstation"]
   },
   {
-    "username": "asmith",
+    "username": "asmith_hr",
     "role": "employee",
     "department": "HR",
+    "privilege_level": "standard",
     "office_hours_start": 9,
     "office_hours_end": 18,
-    "is_admin": false
+    "is_admin": false,
+    "expected_systems": ["hr-portal-01", "corp-workstation"]
   },
   {
-    "username": "root_admin",
+    "username": "sysadmin_root",
     "role": "administrator",
     "department": "IT",
+    "privilege_level": "elevated",
     "office_hours_start": 7,
     "office_hours_end": 16,
-    "is_admin": true
+    "is_admin": true,
+    "expected_systems": ["auth-gateway", "prod-db-01", "corp-fileshare", "admin-jumpbox"]
   },
   {
     "username": "svc_db_backup",
     "role": "service_account",
     "department": "IT",
+    "privilege_level": "elevated",
     "office_hours_start": 0,
     "office_hours_end": 23,
-    "is_admin": true
+    "is_admin": true,
+    "expected_systems": ["prod-db-01", "backup-server-01"]
   }
 ]

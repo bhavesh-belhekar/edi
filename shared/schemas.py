@@ -26,6 +26,13 @@ class UserInfo(BaseModel):
 class ProcessInfo(BaseModel):
     name: Optional[str] = Field(None, description="Running process name (e.g., sshd, bash)")
     pid: Optional[int] = Field(None, description="Process ID")
+    parent_process_name: Optional[str] = Field(None, description="Parent process name")
+    command_line: Optional[str] = Field(None, description="Full execution command line")
+
+class FileInfo(BaseModel):
+    file_path: Optional[str] = Field(None, description="Absolute path to the file")
+    file_name: Optional[str] = Field(None, description="Base name of the file")
+    file_hash: Optional[str] = Field(None, description="SHA256 hash of the file if calculated")
 
 class HTTPInfo(BaseModel):
     method: Optional[str] = Field(None, description="HTTP Method (GET, POST, etc.)")
@@ -36,11 +43,24 @@ class SystemInfo(BaseModel):
     os: Optional[str] = Field(None, description="Operating system identifier")
     container_id: Optional[str] = Field(None, description="Docker/K8s container ID if applicable")
 
+class DNSInfo(BaseModel):
+    queried_domain: Optional[str] = Field(None, description="The domain name queried")
+    query_type: Optional[str] = Field(None, description="DNS query type (A, AAAA, TXT, MX, CNAME, etc.)")
+    resolved_ip: Optional[str] = Field(None, description="The IP address resolved")
+    response_code: Optional[str] = Field(None, description="DNS response code (NOERROR, NXDOMAIN, SERVFAIL, etc.)")
+    ttl: Optional[int] = Field(None, description="Time to live in seconds")
+
 class BehavioralFeatures(BaseModel):
     login_frequency: int = Field(0, description="Logins observed within the sliding window")
     failed_attempts: int = Field(0, description="Failed attempts within the sliding window")
     time_window_seconds: int = Field(60, description="Window size in seconds")
     odd_hour_activity: bool = Field(False, description="True if activity occurs outside standard baseline hours")
+    
+    # DNS / Network Behavioral Features
+    query_frequency: int = Field(0, description="Number of DNS queries in rolling window")
+    high_entropy_domain: bool = Field(False, description="True if domain name has high entropy")
+    new_domain_observed: bool = Field(False, description="True if domain is newly observed")
+    beaconing_detected: bool = Field(False, description="True if periodic beaconing pattern is detected")
 
 class DetectionInfo(BaseModel):
     signature_match: bool = Field(False, description="True if matched via fingerprint Fast Path")
@@ -51,6 +71,8 @@ class DetectionInfo(BaseModel):
 
 class CorrelationInfo(BaseModel):
     attack_chain_id: Optional[str] = Field(None, description="UUID of the correlated multi-stage attack graph")
+    session_id: Optional[str] = Field(None, description="User or host interactive session ID")
+    parent_event_id: Optional[str] = Field(None, description="Parent event UUID")
     related_events: List[str] = Field(default_factory=list, description="List of related event UUIDs")
 
 class MITREAttackInfo(BaseModel):
@@ -87,8 +109,10 @@ class SecurityEvent(BaseModel):
     destination: Optional[DestinationInfo] = None
     user: Optional[UserInfo] = None
     process: Optional[ProcessInfo] = None
+    file: Optional[FileInfo] = None
     http: Optional[HTTPInfo] = None
     system: Optional[SystemInfo] = None
+    dns: Optional[DNSInfo] = None
 
     # Analytical State Blocks (Auto-instantiated with defaults)
     behavioral_features: BehavioralFeatures = Field(default_factory=BehavioralFeatures)

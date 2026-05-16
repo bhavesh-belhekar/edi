@@ -1,0 +1,26 @@
+{
+  "office_documents": [
+    "C:\\Users\\Public\\Documents\\finance_Q3.xlsx",
+    "C:\\Users\\Public\\Documents\\employees.csv",
+    "C:\\Users\\Public\\Documents\\project_alpha.docx",
+    "/home/user/Documents/report.pdf"
+  ],
+  "sensitive_files": [
+    "C:\\Windows\\NTDS\\ntds.dit",
+    "C:\\Windows\\System32\\config\\SAM",
+    "/etc/shadow",
+    "/etc/passwd",
+    "C:\\Users\\admin\\Desktop\\passwords.txt",
+    "/root/.ssh/id_rsa"
+  ],
+  "configuration_files": [
+    "/etc/ssh/sshd_config",
+    "/etc/nginx/nginx.conf",
+    "C:\\Windows\\System32\\drivers\\etc\\hosts"
+  ],
+  "security_logs": [
+    "/var/log/auth.log",
+    "/var/log/syslog",
+    "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"
+  ]
+}

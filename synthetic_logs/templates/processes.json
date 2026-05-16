@@ -1,0 +1,34 @@
+{
+  "normal_processes": [
+    "explorer.exe",
+    "chrome.exe",
+    "outlook.exe",
+    "teams.exe",
+    "bash",
+    "systemd"
+  ],
+  "admin_processes": [
+    "cmd.exe",
+    "powershell.exe",
+    "mmc.exe",
+    "sshd",
+    "sudo",
+    "apt-get"
+  ],
+  "suspicious_processes": [
+    "certutil.exe",
+    "whoami.exe",
+    "net.exe",
+    "nltest.exe",
+    "vssadmin.exe",
+    "wmic.exe"
+  ],
+  "malware_processes": [
+    "mimikatz.exe",
+    "psexec.exe",
+    "bloodhound.exe",
+    "wannacry.exe",
+    "nc",
+    "nmap"
+  ]
+}

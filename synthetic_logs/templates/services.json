@@ -1,0 +1,22 @@
+{
+  "authentication_services": [
+    "sshd",
+    "lsass",
+    "Active Directory Domain Services"
+  ],
+  "security_services": [
+    "Windows Defender",
+    "wazuh-agent",
+    "CrowdStrike Falcon"
+  ],
+  "web_services": [
+    "nginx",
+    "apache2",
+    "IIS Admin Service"
+  ],
+  "databases": [
+    "postgresql",
+    "mysql",
+    "SQL Server"
+  ]
+}

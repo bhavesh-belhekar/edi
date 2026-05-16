@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 from faker import Faker
 from shared.schemas import (
     SecurityEvent, SourceInfo, DestinationInfo, UserInfo, 
-    ProcessInfo, HTTPInfo, SystemInfo, BehavioralFeatures, DetectionInfo
+    ProcessInfo, HTTPInfo, SystemInfo, BehavioralFeatures, DetectionInfo, MITREAttackInfo, CorrelationInfo
 )
 
 class AuthEventGenerator:
@@ -95,6 +95,18 @@ class AuthEventGenerator:
             failed_attempts=0,
             odd_hour_activity=odd_hour
         )
+
+        session_id = f"sess_{uuid.uuid4().hex[:8]}"
+        self.user_state[user["username"]]["current_session"] = session_id
+        
+        event.correlation = CorrelationInfo(session_id=session_id)
+        
+        if odd_hour or "vpn_pool" in ip_pool:
+            event.detection = DetectionInfo(anomaly_score=random.uniform(0.1, 0.4), ueba_score=0.4, risk_score=20.0, risk_level="low")
+        else:
+            event.detection = DetectionInfo(anomaly_score=random.uniform(0.01, 0.05), ueba_score=0.01, risk_score=0.0, risk_level="low")
+
+        event.mitre_attack = MITREAttackInfo(technique_id="T1078", technique_name="Valid Accounts", tactic="Initial Access", confidence=0.8)
         
         event.raw_log = f"sshd: Accepted publickey for {user['username']} from {src_ip} port {random.randint(10000,60000)} ssh2"
         return event
@@ -138,6 +150,9 @@ class AuthEventGenerator:
             odd_hour_activity=self._is_odd_hour(user, timestamp)
         )
         
+        event.detection = DetectionInfo(anomaly_score=min(0.1 * current_failures, 0.95), ueba_score=min(0.2 * current_failures, 0.9), risk_score=min(10.0 * current_failures, 95.0), risk_level=severity)
+        event.mitre_attack = MITREAttackInfo(technique_id="T1110", technique_name="Brute Force", tactic="Credential Access", confidence=0.85)
+        
         event.raw_log = f"sshd: Failed password for {user['username']} from {src_ip} port {random.randint(10000,60000)}"
         return event
 
@@ -179,7 +194,14 @@ class AuthEventGenerator:
             
         # Force the hour outside standard bounds
         hours_to_avoid = list(range(admin_user["office_hours_start"], admin_user["office_hours_end"] + 1))
-        bad_hour = random.choice([h for h in range(24) if h not in hours_to_avoid])
+        possible_bad_hours = [h for h in range(24) if h not in hours_to_avoid]
+        
+        if not possible_bad_hours:
+            # If the user works 24/7 (e.g. service account), arbitrarily force a generally 
+            # suspicious time like 3 AM to flag as odd/anomaly purely by mathematical baseline
+            bad_hour = 3
+        else:
+            bad_hour = random.choice(possible_bad_hours)
         
         bad_time = timestamp.replace(hour=bad_hour, minute=random.randint(0, 59))
         
