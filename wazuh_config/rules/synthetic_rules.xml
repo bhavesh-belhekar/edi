@@ -1,37 +1,37 @@
 <group name="synthetic_telemetry,">
-
-  <!-- Base JSON Rule -->
-  <rule id="100000" level="3">
-    <decoded_as>synthetic_telemetry</decoded_as>
-    <description>Synthetic Telemetry Event Received.</description>
+  <rule id="110000" level="3">
+    <if_sid>86600</if_sid>
+    <field name="event_id">\.+</field>
+    <description>Synthetic telemetry event received: $(event_type)</description>
   </rule>
 
-  <!-- High Risk Events -->
-  <rule id="100001" level="10">
-    <if_sid>100000</if_sid>
+  <rule id="110001" level="7">
+    <if_sid>110000</if_sid>
+    <field name="severity">warning</field>
+    <description>Synthetic warning event: $(event_type)</description>
+  </rule>
+
+  <rule id="110002" level="10">
+    <if_sid>110000</if_sid>
     <field name="severity">high</field>
-    <description>High Severity Cybersecurity Event: $(event_type)</description>
+    <description>Synthetic high severity event: $(event_type)</description>
   </rule>
 
-  <!-- Critical Events -->
-  <rule id="100002" level="12">
-    <if_sid>100000</if_sid>
+  <rule id="110003" level="12">
+    <if_sid>110000</if_sid>
     <field name="severity">critical</field>
-    <description>Critical Severity Attack Chain Detected: $(event_type)</description>
+    <description>Synthetic critical event: $(event_type)</description>
   </rule>
 
-  <!-- Specific Alert: Outbound C2 Traffic -->
-  <rule id="100003" level="12">
-    <if_sid>100000</if_sid>
-    <field name="event_type">firewall_allow|firewall_deny</field>
-    <field name="detection.risk_level">critical|high</field>
-    <description>Malicious Firewall Access Detected - Risk Level High</description>
-  </rule>
-
-  <!-- Specific Alert: Failed Login -->
-  <rule id="100004" level="7">
-    <if_sid>100000</if_sid>
+  <rule id="110004" level="8">
+    <if_sid>110000</if_sid>
     <field name="event_type">failed_login</field>
-    <description>Authentication Failure for user: $(user.username)</description>
+    <description>Synthetic failed login for user $(user.username)</description>
+  </rule>
+
+  <rule id="110005" level="12">
+    <if_sid>110000</if_sid>
+    <field name="event_type">firewall_allow|firewall_deny</field>
+    <description>Synthetic firewall security event: $(event_type)</description>
   </rule>
 </group>

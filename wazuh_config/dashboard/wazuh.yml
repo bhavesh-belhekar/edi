@@ -1,0 +1,12 @@
+---
+hosts:
+  - local-wazuh:
+      url: https://wazuh.manager
+      port: 55000
+      username: wazuh-wui
+      password: wazuh-wui
+      run_as: false
+
+checks.api: false
+wazuh.monitoring.enabled: false
+wazuh.updates.disabled: true

@@ -1,10 +1,6 @@
-<!-- Custom Decoder for Synthetic JSON Telemetry -->
+<!-- STEP 2: Decode newline-delimited JSON synthetic telemetry. -->
 
-<decoder name="synthetic_telemetry">
-  <prematch>{"event_id":</prematch>
-</decoder>
-
-<decoder name="synthetic_telemetry_child">
-  <parent>synthetic_telemetry</parent>
+<decoder name="synthetic_telemetry_json">
+  <prematch>"event_id":</prematch>
   <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>

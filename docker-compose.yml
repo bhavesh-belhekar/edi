@@ -6,27 +6,37 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: soc_telemetry_generator
+    restart: unless-stopped
     environment:
-      - PYTHONPATH=/app
-      - PYTHONUNBUFFERED=1
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
     volumes:
       - ./:/app
       - ./synthetic_logs/output:/app/synthetic_logs/output
       - ./wazuh_logs:/app/wazuh_logs
-    stdin_open: true 
+    stdin_open: true
     tty: true
     command: ["python", "synthetic_logs/stream_logs.py", "--continuous", "--speed", "2.0"]
 
   wazuh.indexer:
     image: wazuh/wazuh-indexer:4.9.0
-    hostname: wazuh.indexer
     container_name: wazuh.indexer
+    hostname: wazuh.indexer
+    restart: unless-stopped
     ports:
       - "9200:9200"
     environment:
-      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
-      - "discovery.type=single-node"
-      - "network.host=0.0.0.0"
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      cluster.name: wazuh-local-dev
+      node.name: wazuh.indexer
+      discovery.type: single-node
+      network.host: 0.0.0.0
+      bootstrap.memory_lock: "true"
+      compatibility.override_main_response_version: "true"
+      plugins.security.disabled: "true"
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      DISABLE_PERFORMANCE_ANALYZER_AGENT_CLI: "true"
     ulimits:
       memlock:
         soft: -1
@@ -34,11 +44,22 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+    volumes:
+      - wazuh_indexer_data:/var/lib/wazuh-indexer
+      - ./wazuh_config/indexer/opensearch.yml:/usr/share/wazuh-indexer/opensearch.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200 >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
 
   wazuh.manager:
     image: wazuh/wazuh-manager:4.9.0
-    hostname: wazuh.manager
     container_name: wazuh.manager
+    hostname: wazuh.manager
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "/setup_wazuh.sh"]
     depends_on:
       - wazuh.indexer
     ports:
@@ -47,23 +68,96 @@ services:
       - "514:514/udp"
       - "55000:55000"
     environment:
-      - INDEXER_URL=https://wazuh.indexer:9200
-      - INDEXER_USERNAME=admin
-      - INDEXER_PASSWORD=admin
+      INDEXER_URL: http://wazuh.indexer:9200
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: admin
+      FILEBEAT_SSL_VERIFICATION_MODE: none
     volumes:
+      - wazuh_manager_etc:/var/ossec/etc
+      - wazuh_manager_logs:/var/ossec/logs
+      - wazuh_manager_queue:/var/ossec/queue
+      - wazuh_manager_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_manager_integrations:/var/ossec/integrations
+      - wazuh_manager_active_response:/var/ossec/active-response/bin
+      - wazuh_manager_agentless:/var/ossec/agentless
+      - wazuh_manager_wodles:/var/ossec/wodles
+      - wazuh_filebeat_etc:/etc/filebeat
+      - wazuh_filebeat_var:/var/lib/filebeat
       - ./wazuh_logs:/var/ossec/logs/synthetic_telemetry:ro
       - ./wazuh_config/decoders/synthetic_decoders.xml:/tmp/synthetic_decoders.xml:ro
       - ./wazuh_config/rules/synthetic_rules.xml:/tmp/synthetic_rules.xml:ro
-      - ./wazuh_config/setup_wazuh.sh:/setup_wazuh.sh
+      - ./wazuh_config/setup_wazuh.sh:/setup_wazuh.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "/var/ossec/bin/wazuh-control status | grep -q 'wazuh-analysisd is running' && /var/ossec/bin/wazuh-control status | grep -q 'wazuh-logcollector is running'"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 90s
 
   wazuh.dashboard:
     image: wazuh/wazuh-dashboard:4.9.0
-    hostname: wazuh.dashboard
     container_name: wazuh.dashboard
+    hostname: wazuh.dashboard
+    restart: unless-stopped
     depends_on:
-      - wazuh.manager
       - wazuh.indexer
+      - wazuh.manager
     ports:
-      - "443:5601"
+      - "5601:5601"
     environment:
-      - INDEXER_URL=https://wazuh.indexer:9200
+      INDEXER_URL: http://wazuh.indexer:9200
+      INDEXER_USERNAME: admin
+      INDEXER_PASSWORD: admin
+      OPENSEARCH_HOSTS: '["http://wazuh.indexer:9200"]'
+      WAZUH_API_URL: https://wazuh.manager:55000
+      DASHBOARD_USERNAME: admin
+      DASHBOARD_PASSWORD: admin
+      SERVER_SSL_ENABLED: "false"
+    volumes:
+      - ./wazuh_config/dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml:ro
+      - ./wazuh_config/dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5601/api/status >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  ingestion.service:
+    build:
+      context: ./ingestion_service
+      dockerfile: Dockerfile
+    container_name: ingestion_service
+    hostname: ingestion.service
+    restart: unless-stopped
+    depends_on:
+      - wazuh.indexer
+    environment:
+      OPENSEARCH_HOST: wazuh.indexer
+      OPENSEARCH_PORT: 9200
+      OPENSEARCH_USER: admin
+      OPENSEARCH_PASSWORD: admin
+      OPENSEARCH_INDEX_PATTERN: wazuh-alerts-4.x-*
+      POLL_INTERVAL_SECONDS: 15
+      BATCH_SIZE: 200
+      OUTPUT_DIR: /app/output
+      STATE_FILE: /app/state/last_fetch_state.json
+      MAX_RETRIES: 5
+      RETRY_BACKOFF_SECONDS: 5
+    volumes:
+      - ./ingestion_service:/app
+      - ./ingestion_service/output:/app/output
+    command: ["python", "main.py"]
+
+volumes:
+  wazuh_indexer_data:
+  wazuh_manager_etc:
+  wazuh_manager_logs:
+  wazuh_manager_queue:
+  wazuh_manager_var_multigroups:
+  wazuh_manager_integrations:
+  wazuh_manager_active_response:
+  wazuh_manager_agentless:
+  wazuh_manager_wodles:
+  wazuh_filebeat_etc:
+  wazuh_filebeat_var:
