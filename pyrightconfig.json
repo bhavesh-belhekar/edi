@@ -7,4 +7,10 @@
     "extraPaths": [
         "."
     ]
+    ,
+    "exclude": [
+        "synthetic_logs",
+        ".venv",
+        "venv"
+    ]
 }

@@ -3,8 +3,7 @@ import math
 import random
 import uuid
 import string
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from datetime import timedelta
 
 from faker import Faker
 from shared.schemas import (

@@ -1,4 +1,5 @@
-import json, glob
+import json
+import glob
 from dateutil import parser as date_parser
 
 fs = glob.glob("synthetic_logs/output/*_dataset_*.ndjson")

@@ -22,25 +22,25 @@ def validate_datasets():
         parts = basename.replace('.ndjson', '').split('_dataset_')
         if len(parts) > 1:
             timestamps.add(parts[1])
-    
+
     latest_ts = sorted(list(timestamps))[-1]
-    
+
     print(f"[STEP 11 - CLEANUP] Latest generation timestamp: {latest_ts}")
     for f in all_files:
         if latest_ts not in f:
             print(f"  - Deleting outdated file: {f}")
             os.remove(f)
-            
+
     latest_files = glob.glob(f"{output_dir}/*dataset_{latest_ts}.ndjson")
-    
+
     print("\n====================================================")
     print("STEP 1: VALIDATE NDJSON FORMAT")
     print("====================================================")
-    
+
     dataset_records = {}
     malformed_records = 0
     all_events = []
-    
+
     for f in latest_files:
         source_name = os.path.basename(f).split('_dataset')[0]
         count = 0
@@ -55,17 +55,17 @@ def validate_datasets():
                     malformed_records += 1
         dataset_records[f] = count
         print(f"✔ {os.path.basename(f)} : {count} valid records")
-        
+
     print(f"\nTotal Records Parsed: {len(all_events)}")
     print(f"Malformed Records: {malformed_records}")
-    
+
     print("\n====================================================")
     print("STEP 2: VERIFY SHARED ATTACK CHAIN CORRELATION")
     print("====================================================")
-    
+
     chain_datasets = defaultdict(set)
     chain_timelines = defaultdict(list)
-    
+
     for ev in all_events:
         corr = ev.get('correlation', {})
         if corr:
@@ -74,7 +74,7 @@ def validate_datasets():
                 src = ev['_source_dataset']
                 chain_datasets[chain_id].add(src)
                 chain_timelines[chain_id].append(ev)
-            
+
     print(f"Total Unique Attack Chains Found: {len(chain_datasets)}")
     orphaned_chains = 0
     for chain_id, datasets in chain_datasets.items():
@@ -82,7 +82,7 @@ def validate_datasets():
         if len(datasets) < 2:
             orphaned_chains += 1
             print("    [!] ORPHANED CHAIN (Found in < 2 datasets)")
-            
+
     print(f"\nOrphaned/Partial Chains: {orphaned_chains}")
 
     print("\n====================================================")
@@ -96,7 +96,7 @@ def validate_datasets():
             print(f"      {stages[:4]} ... {stages[-4:]}")
         else:
             print(f"      {stages}")
-        
+
         ts_valid = True
         for i in range(1, len(events)):
             if events[i]['timestamp'] < events[i-1]['timestamp']:
@@ -125,15 +125,15 @@ def validate_datasets():
             separation_errors += 1
     if separation_errors == 0:
         print("✔ Strict separation confirmed. No mixed telemetry types.")
-        
+
     print("\n====================================================")
     print("STEP 5 & 6: VERIFY SCHEMA CONSISTENCY & DETECTION")
     print("====================================================")
     required_fields = ['event_id', 'timestamp', 'event_type', 'severity', 'raw_log']
-    
+
     schema_errors = 0
     det_errors = 0
-    
+
     for ev in all_events:
         for f in required_fields:
             if f not in ev:
@@ -142,12 +142,12 @@ def validate_datasets():
             det = ev['detection']
             if not all(k in det for k in ['anomaly_score', 'risk_score', 'risk_level']):
                 det_errors += 1
-                
+
     if schema_errors == 0:
         print("✔ Top-level schema consistency confirmed across all sources.")
     else:
         print(f"[!] Found {schema_errors} schema consistency issues.")
-        
+
     if det_errors == 0:
         print("✔ Detection object structure valid (contains anomaly, risk metrics).")
 
@@ -162,7 +162,7 @@ def validate_datasets():
             if m.get('technique_id') and m.get('tactic'):
                 mitre_count += 1
                 tactics.add(m.get('tactic'))
-    
+
     print(f"Total events with MITRE mapping: {mitre_count}")
     print(f"Mapped Tactics: {tactics}")
 
@@ -172,7 +172,7 @@ def validate_datasets():
     benign = 0
     malicious = 0
     severities = defaultdict(int)
-    
+
     for ev in all_events:
         sev = ev.get('severity', 'info').lower()
         severities[sev] += 1
@@ -180,16 +180,16 @@ def validate_datasets():
             malicious += 1
         else:
             benign += 1
-            
+
     print("Severity Distribution:")
     for s, c in severities.items():
         print(f"  {s}: {c}")
-        
+
     print(f"\nTotal Benign Events: {benign}")
     print(f"Total Malicious Events: {malicious}")
     mal_pct = (malicious / len(all_events)) * 100 if len(all_events) > 0 else 0
     print(f"Malicious Activity: {mal_pct:.2f}%")
-    if mal_pct < 20: 
+    if mal_pct < 20:
         print("✔ Majority of traffic is benign, simulating realistic environment.")
 
 if __name__ == '__main__':

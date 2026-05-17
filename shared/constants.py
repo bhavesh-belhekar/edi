@@ -1,11 +1,12 @@
-from enum import Enum, auto
+from enum import Enum
 
 """
 CENTRALIZED CONSTANTS AND ENUMERATIONS.
 
-Defining constants strictly categorizes system state, preventing hard-coded typos 
+Defining constants strictly categorizes system state, preventing hard-coded typos
 (e.g., checking for "critical" vs "Critical") from breaking analytics down the pipeline.
 """
+
 
 class RiskLevel(str, Enum):
     LOW = "low"
@@ -13,11 +14,13 @@ class RiskLevel(str, Enum):
     HIGH = "high"
     CRITICAL = "critical"
 
+
 class WazuhSeverity(str, Enum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
     ALERT = "alert"
+
 
 class MitreTactic(str, Enum):
     INITIAL_ACCESS = "Initial Access"
@@ -33,6 +36,7 @@ class MitreTactic(str, Enum):
     EXFILTRATION = "Exfiltration"
     IMPACT = "Impact"
 
+
 class PlaybookStatus(str, Enum):
     NONE = "none"
     PENDING = "pending"
@@ -40,10 +44,12 @@ class PlaybookStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+
 class ConnectionStatus(str, Enum):
     CONNECTED = "connected"
     DISCONNECTED = "disconnected"
     RETRYING = "retrying"
+
 
 # ==============================================================================
 # GLOBAL DEFAULT CONFIGURATIONS

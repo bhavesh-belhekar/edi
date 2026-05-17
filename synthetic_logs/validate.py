@@ -16,8 +16,7 @@ def main():
     print("\n[1/4] Testing schema imports...")
     try:
         from shared.schemas import (
-            SecurityEvent, FirewallInfo, ProxyInfo, DNSInfo,
-            SourceInfo, DestinationInfo, UserInfo
+            SecurityEvent, FirewallInfo, ProxyInfo
         )
         print("  ✓ SecurityEvent, FirewallInfo, ProxyInfo, DNSInfo imported")
         print(f"    FirewallInfo fields: {list(FirewallInfo.model_fields.keys())}")
@@ -94,7 +93,7 @@ def main():
             assert "timestamp" in parsed
             assert "raw_log" in parsed
 
-        print(f"  ✓ All events serialize to valid JSON")
+        print("  ✓ All events serialize to valid JSON")
         print(f"  ✓ Sample keys: {list(json.loads(to_json_str(ev5[0])).keys())}")
     except Exception as e:
         print(f"  ✗ FAILED: {e}")

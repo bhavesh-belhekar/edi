@@ -1,38 +1,182 @@
 <group name="synthetic_telemetry,">
+
+  <!-- ============================================== -->
+  <!-- BASE RULE -->
+  <!-- ============================================== -->
   <rule id="110000" level="3">
     <if_sid>86600</if_sid>
     <field name="event_id">\.+</field>
     <description>Synthetic telemetry event received: $(event_type)</description>
   </rule>
 
-  <rule id="110001" level="7">
+
+  <!-- ============================================== -->
+  <!-- AUTHENTICATION DETECTIONS -->
+  <!-- ============================================== -->
+  <rule id="110101" level="4">
     <if_sid>110000</if_sid>
-    <field name="severity">warning</field>
-    <description>Synthetic warning event: $(event_type)</description>
+    <field name="event_type">successful_login</field>
+    <description>Auth: Successful login for user $(user.username)</description>
+    <mitre>
+      <id>T1078</id>
+    </mitre>
   </rule>
 
-  <rule id="110002" level="10">
-    <if_sid>110000</if_sid>
-    <field name="severity">high</field>
-    <description>Synthetic high severity event: $(event_type)</description>
-  </rule>
-
-  <rule id="110003" level="12">
-    <if_sid>110000</if_sid>
-    <field name="severity">critical</field>
-    <description>Synthetic critical event: $(event_type)</description>
-  </rule>
-
-  <rule id="110004" level="8">
+  <rule id="110102" level="5">
     <if_sid>110000</if_sid>
     <field name="event_type">failed_login</field>
-    <description>Synthetic failed login for user $(user.username)</description>
+    <description>Auth: Failed login for user $(user.username)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
   </rule>
 
-  <rule id="110005" level="12">
+  <rule id="110103" level="8">
+    <if_sid>110101</if_sid>
+    <field name="behavioral_features.odd_hour_activity">true</field>
+    <description>Auth: Suspicious successful login outside business hours for user $(user.username)</description>
+    <mitre>
+      <id>T1078</id>
+    </mitre>
+  </rule>
+
+  <rule id="110104" level="9">
+    <if_sid>110101</if_sid>
+    <field name="user.role">service_account</field>
+    <description>Auth: Interactive login by service account $(user.username)</description>
+    <mitre>
+      <id>T1078.002</id>
+    </mitre>
+  </rule>
+
+
+  <!-- ============================================== -->
+  <!-- ENDPOINT DETECTIONS -->
+  <!-- ============================================== -->
+  <rule id="110201" level="3">
     <if_sid>110000</if_sid>
-    <field name="event_type">firewall_allow|firewall_deny</field>
-    <description>Synthetic firewall security event: $(event_type)</description>
+    <field name="event_type">process_start</field>
+    <description>Endpoint: Process $(process.name) started by $(user.username)</description>
+  </rule>
+
+  <rule id="110202" level="10">
+    <if_sid>110201</if_sid>
+    <field name="process.name">powershell\.exe</field>
+    <field name="process.command_line">EncodedCommand|hidden|bypass|Invoke-</field>
+    <description>Endpoint: Suspicious PowerShell execution detected</description>
+    <mitre>
+      <id>T1059.001</id>
+    </mitre>
+  </rule>
+
+  <rule id="110203" level="12">
+    <if_sid>110201</if_sid>
+    <field name="process.name">mimikatz\.exe|psexec\.exe|procdump\.exe</field>
+    <description>Endpoint: Execution of known credential dumping or lateral movement tool</description>
+    <mitre>
+      <id>T1003</id>
+    </mitre>
+  </rule>
+
+  <rule id="110204" level="9">
+    <if_sid>110201</if_sid>
+    <field name="process.name">schtasks\.exe|reg\.exe</field>
+    <description>Endpoint: Potential persistence behavior detected</description>
+    <mitre>
+      <id>T1053</id>
+      <id>T1112</id>
+    </mitre>
+  </rule>
+
+
+  <!-- ============================================== -->
+  <!-- DNS DETECTIONS -->
+  <!-- ============================================== -->
+  <rule id="110301" level="3">
+    <if_sid>110000</if_sid>
+    <field name="event_type">dns_query</field>
+    <description>DNS: Query for $(dns.query)</description>
+  </rule>
+
+  <rule id="110302" level="10">
+    <if_sid>110301</if_sid>
+    <field name="behavioral_features.high_entropy_domain">true</field>
+    <description>DNS: Possible DGA or DNS Tunneling domain detected</description>
+    <mitre>
+      <id>T1071.004</id>
+      <id>T1568.002</id>
+    </mitre>
+  </rule>
+
+  <rule id="110303" level="9">
+    <if_sid>110301</if_sid>
+    <field name="behavioral_features.beaconing_detected">true</field>
+    <description>DNS: Beaconing activity detected</description>
+    <mitre>
+      <id>T1071</id>
+    </mitre>
+  </rule>
+
+
+  <!-- ============================================== -->
+  <!-- NETWORK / FIREWALL / PROXY DETECTIONS -->
+  <!-- ============================================== -->
+  <rule id="110401" level="3">
+    <if_sid>110000</if_sid>
+    <field name="event_type">firewall_allow|firewall_deny|proxy_request</field>
+    <description>Network: $(event_type) detected</description>
+  </rule>
+
+  <!-- Detect large outbound transfers as potential exfiltration -->
+  <rule id="110402" level="12">
+    <if_sid>110401</if_sid>
+    <field name="event_type">proxy_request</field>
+    <!-- Matches numbers with 7 or more digits (e.g., >= 1,000,000 bytes) -->
+    <field name="proxy.bytes_transferred">\d{7,}</field> 
+    <description>Network: Potential data exfiltration (large transfer) to $(destination.hostname)</description>
+    <mitre>
+      <id>T1041</id>
+    </mitre>
+  </rule>
+
+  <!-- Basic Lateral Movement / Internal Scanning -->
+  <rule id="110403" level="8">
+    <if_sid>110401</if_sid>
+    <field name="event_type">firewall_deny</field>
+    <description>Network: Firewall denied connection to internal asset $(destination.ip)</description>
+    <mitre>
+      <id>T1046</id>
+    </mitre>
+  </rule>
+
+
+  <!-- ============================================== -->
+  <!-- CORRELATION RULES -->
+  <!-- ============================================== -->
+  
+  <!-- T1110: Brute Force Correlation -->
+  <!-- Triggers if 5 failed logins occur for the same user within 3 minutes -->
+  <rule id="110601" level="11" frequency="5" timeframe="180">
+    <if_matched_sid>110102</if_matched_sid>
+    <same_field>user.username</same_field>
+    <description>Auth Correlation: Brute Force attack detected against user $(user.username)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+  </rule>
+
+  <!-- Multi-Stage Attack Correlation -->
+  <!-- Triggers if 3 events associated with the same attack_chain_id occur within 5 minutes -->
+  <rule id="110602" level="14" frequency="3" timeframe="300">
+    <if_matched_group>synthetic_telemetry</if_matched_group>
+    <same_field>correlation.attack_chain_id</same_field>
+    <field name="correlation.attack_chain_id">attack_chain_</field>
+    <description>Multi-Stage Correlation: Coordinated attack chain detected (Chain ID: $(correlation.attack_chain_id))</description>
+    <mitre>
+      <id>TA0001</id>
+      <id>TA0002</id>
+      <id>TA0040</id>
+    </mitre>
   </rule>
 
 </group>

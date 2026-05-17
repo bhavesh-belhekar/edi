@@ -10,17 +10,17 @@ def load_latest_datasets(output_dir):
     all_files = glob.glob(f"{output_dir}/*dataset_*.ndjson")
     if not all_files:
         return []
-        
+
     timestamps = set()
     for f in all_files:
         basename = os.path.basename(f)
         parts = basename.replace('.ndjson', '').split('_dataset_')
         if len(parts) > 1:
             timestamps.add(parts[1])
-            
+
     latest_ts = sorted(list(timestamps))[-1]
     latest_files = glob.glob(f"{output_dir}/*dataset_{latest_ts}.ndjson")
-    
+
     events = []
     for f in latest_files:
         source = os.path.basename(f).split('_dataset')[0]
@@ -52,11 +52,11 @@ def stream_events(events, wazuh_logs_dir, speed_multiplier=1.0, continuous=False
 
         for idx, event in enumerate(events):
             event_time = date_parser.parse(event['timestamp'])
-            
+
             simulated_offset = (event_time - first_event_time).total_seconds()
-            
+
             target_real_time = start_real_time + (simulated_offset / speed_multiplier)
-            
+
             now = time.time()
             if target_real_time > now:
                 sleep_duration = target_real_time - now
@@ -65,10 +65,10 @@ def stream_events(events, wazuh_logs_dir, speed_multiplier=1.0, continuous=False
                 time.sleep(sleep_duration)
 
             log_file = os.path.join(wazuh_logs_dir, f"{event['_source_type']}.log")
-            
+
             with open(log_file, 'a') as f:
                 f.write(event['_raw_line'] + '\n')
-            
+
             if idx % 10 == 0 or event.get('severity') in ['high', 'critical']:
                 sev = event.get('severity', 'info').upper()
                 src = event.get('_source_type')
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("--continuous", action="store_true", help="Loop the dataset infinitely.")
     parser.add_argument("--input-dir", type=str, default="synthetic_logs/output", help="Directory containing NDJSON datasets.")
     parser.add_argument("--output-dir", type=str, default="wazuh_logs", help="Directory for Wazuh to monitor.")
-    
+
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     loaded_events = load_latest_datasets(args.input_dir)

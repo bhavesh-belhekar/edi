@@ -10,6 +10,7 @@ This file contains ONLY stateless, pure functions.
 Business logic (e.g., calculating ML scores, DB queries) MUST NEVER reside here.
 """
 
+
 def get_utc_now() -> datetime:
     """
     Returns the current timezone-aware UTC datetime.
@@ -17,11 +18,13 @@ def get_utc_now() -> datetime:
     """
     return datetime.now(timezone.utc)
 
+
 def generate_uuid() -> str:
     """
     Generates a standardized UUID4 string for linking events and playbooks.
     """
     return str(uuid.uuid4())
+
 
 def safe_dict_get(data: Dict[str, Any], keys: list, default: Any = None) -> Any:
     """
@@ -35,19 +38,22 @@ def safe_dict_get(data: Dict[str, Any], keys: list, default: Any = None) -> Any:
         current = current[key]
     return current
 
+
 class CustomJSONEncoder(json.JSONEncoder):
     """
     Custom JSON encoder to handle dates, UUIDs, and Pydantic models serialization
     safely over RabbitMQ boundaries.
     """
-    def default(self, obj: Any) -> Any:
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        if isinstance(obj, uuid.UUID):
-            return str(obj)
-        if hasattr(obj, "model_dump"):  # Handle Pydantic V2
-            return obj.model_dump()
-        return super().default(obj)
+
+    def default(self, o: Any) -> Any:
+        if isinstance(o, datetime):
+            return o.isoformat()
+        if isinstance(o, uuid.UUID):
+            return str(o)
+        if hasattr(o, "model_dump"):  # Handle Pydantic V2
+            return o.model_dump(exclude_none=True)
+        return super().default(o)
+
 
 def to_json_str(obj: Any) -> str:
     """

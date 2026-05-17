@@ -6,7 +6,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any
+from typing import Dict, Any
 
 # Ensure the root project directory is in the sys.path so 'shared' module can be found
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -390,11 +390,11 @@ def _write_datasets(datasets, format_type, attack_scenarios):
         print(f"  Total Events       : {len(events)}")
         print(f"  Attack-Correlated  : {attack_chain_count}")
         print(f"  File               : {file_path}")
-        print(f"  Severity Breakdown :")
+        print("  Severity Breakdown :")
         for sev in ["info", "warning", "medium", "high", "critical"]:
             if sev in severity_counts:
                 print(f"    {sev:12s} : {severity_counts[sev]}")
-        print(f"  Event Types        :")
+        print("  Event Types        :")
         for etype, cnt in type_counts.most_common(8):
             print(f"    {etype:28s} : {cnt}")
 
@@ -408,7 +408,7 @@ def _write_datasets(datasets, format_type, attack_scenarios):
                 chain_ids.add(ev.correlation.attack_chain_id)
 
     print(f"\n{'=' * 70}")
-    print(f"  GENERATION COMPLETE")
+    print("  GENERATION COMPLETE")
     print(f"{'=' * 70}")
     print(f"  Total Events (all sources) : {total_events}")
     print(f"  Total Datasets Written     : {len(datasets)}")
@@ -418,7 +418,7 @@ def _write_datasets(datasets, format_type, attack_scenarios):
     print(f"  Output Directory           : {os.path.abspath(os.path.join(os.path.dirname(__file__), 'output'))}")
 
     if chain_ids:
-        print(f"\n  Cross-Dataset Correlation IDs:")
+        print("\n  Cross-Dataset Correlation IDs:")
         for cid in sorted(chain_ids):
             sources_with = []
             for name, events in datasets.items():

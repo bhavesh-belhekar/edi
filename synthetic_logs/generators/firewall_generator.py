@@ -1,13 +1,12 @@
 import json
 import random
 import uuid
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from datetime import timedelta
 
 from faker import Faker
 from shared.schemas import (
     SecurityEvent, SourceInfo, DestinationInfo, UserInfo, SystemInfo,
-    FirewallInfo, BehavioralFeatures, DetectionInfo, MITREAttackInfo, CorrelationInfo
+    FirewallInfo, DetectionInfo, MITREAttackInfo, CorrelationInfo
 )
 
 

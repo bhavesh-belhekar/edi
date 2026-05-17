@@ -8,8 +8,20 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from dateutil import parser as date_parser
-from opensearchpy import OpenSearch, RequestsHttpConnection
-from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError, TransportError
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from opensearchpy import OpenSearch, RequestsHttpConnection  # type: ignore
+    from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError, TransportError  # type: ignore
+else:
+    try:
+        from opensearchpy import OpenSearch, RequestsHttpConnection
+        from opensearchpy.exceptions import ConnectionError as OpenSearchConnectionError, TransportError
+    except Exception:  # pragma: no cover - optional dependency in some environments
+        OpenSearch = None  # type: ignore
+        RequestsHttpConnection = None  # type: ignore
+        OpenSearchConnectionError = Exception
+        TransportError = Exception
 
 from shared.schemas import (
     BehavioralFeatures,
@@ -18,7 +30,6 @@ from shared.schemas import (
     DestinationInfo,
     DNSInfo,
     FirewallInfo,
-    FileInfo,
     HTTPInfo,
     MITREAttackInfo,
     PlaybookInfo,
@@ -97,9 +108,9 @@ def safe_int(value: Any) -> Optional[int]:
         return None
 
 
-def safe_str(value: Any, fallback: str = "") -> str:
+def safe_str(value: Any, fallback: Optional[str] = None) -> str:
     if value is None:
-        return fallback
+        return fallback or ""
     return str(value)
 
 
@@ -115,10 +126,17 @@ def normalize_event(hit: Dict[str, Any]) -> Dict[str, Any]:
     process_block = source_doc.get("process", {}) or {}
     system_block = source_doc.get("system", {}) or {}
 
+    event_type_val = safe_str(
+        source_doc.get("event_type") or source_doc.get("rule", {}).get("description") or "unknown_event"
+    )
+    raw_log_val = safe_str(
+        source_doc.get("raw_log") or source_doc.get("full_log") or json.dumps(source_doc, default=str)
+    )
+
     event = SecurityEvent(
         event_id=safe_str(event_id),
         timestamp=timestamp,
-        event_type=safe_str(source_doc.get("event_type") or source_doc.get("rule", {}).get("description") or "unknown_event"),
+        event_type=event_type_val,
         severity=safe_str(source_doc.get("severity", "info")),
         source=SourceInfo(
             ip=safe_str(source_block.get("ip") or DEFAULT_IP, DEFAULT_IP),
@@ -152,8 +170,10 @@ def normalize_event(hit: Dict[str, Any]) -> Dict[str, Any]:
             status_code=safe_int(source_doc.get("http", {}).get("status_code")) or 0,
         ),
         dns=DNSInfo(
-            queried_domain=safe_str(source_doc.get("dns", {}).get("queried_domain"), None),
-            response_code=safe_str(source_doc.get("dns", {}).get("response_code"), None),
+            queried_domain=safe_str(source_doc.get("dns", {}).get("queried_domain"), ""),
+            query_type=safe_str(source_doc.get("dns", {}).get("query_type"), ""),
+            resolved_ip=safe_str(source_doc.get("dns", {}).get("resolved_ip"), ""),
+            response_code=safe_str(source_doc.get("dns", {}).get("response_code"), ""),
             ttl=safe_int(source_doc.get("dns", {}).get("ttl")),
         ),
         firewall=FirewallInfo(
@@ -181,7 +201,7 @@ def normalize_event(hit: Dict[str, Any]) -> Dict[str, Any]:
         correlation=CorrelationInfo(**(source_doc.get("correlation") or {})),
         mitre_attack=MITREAttackInfo(**(source_doc.get("mitre_attack") or {})),
         playbook=PlaybookInfo(**(source_doc.get("playbook") or {})),
-        raw_log=safe_str(source_doc.get("raw_log") or source_doc.get("full_log") or json.dumps(source_doc, default=str)),
+        raw_log=raw_log_val,
     )
 
     event_payload = event.model_dump(exclude_none=True)
@@ -193,8 +213,11 @@ def normalize_event(hit: Dict[str, Any]) -> Dict[str, Any]:
     return event_payload
 
 
-def build_client() -> OpenSearch:
+def build_client() -> Any:
     logger.info("Connecting to OpenSearch at %s:%s", OPENSEARCH_HOST, OPENSEARCH_PORT)
+    if OpenSearch is None:
+        raise RuntimeError("opensearchpy is not installed; cannot build OpenSearch client")
+
     return OpenSearch(
         hosts=[{"host": OPENSEARCH_HOST, "port": OPENSEARCH_PORT}],
         http_compress=True,
@@ -208,7 +231,7 @@ def build_client() -> OpenSearch:
     )
 
 
-def fetch_latest_index_timestamp(client: OpenSearch) -> str:
+def fetch_latest_index_timestamp(client: Any) -> str:
     response = client.search(
         index=OPENSEARCH_INDEX_PATTERN,
         body={
@@ -230,7 +253,7 @@ def build_query(last_timestamp: Optional[str]) -> Dict[str, Any]:
     return {"range": {"@timestamp": {"gt": last_timestamp}}}
 
 
-def fetch_new_documents(client: OpenSearch, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+def fetch_new_documents(client: Any, state: Dict[str, Any]) -> List[Dict[str, Any]]:
     query = build_query(state.get("last_fetch_timestamp"))
     search_after = state.get("last_sort")
     sort_fields = [{"@timestamp": {"order": "asc", "unmapped_type": "date"}}, {"_id": {"order": "asc"}}]
@@ -270,7 +293,7 @@ def append_processed_id(state: Dict[str, Any], event_id: str) -> None:
         state["processed_ids"] = processed_ids[-MAX_PROCESSED_IDS:]
 
 
-def bootstrap_initial_state(client: OpenSearch, state: Dict[str, Any]) -> Dict[str, Any]:
+def bootstrap_initial_state(client: Any, state: Dict[str, Any]) -> Dict[str, Any]:
     last_timestamp = fetch_latest_index_timestamp(client)
     state["last_fetch_timestamp"] = last_timestamp
     state["last_sort"] = None
@@ -311,10 +334,16 @@ def run() -> None:
                 count = write_events(normalized)
                 if normalized:
                     last_hit = docs[-1]
-                    state["last_fetch_timestamp"] = last_hit.get("sort", [None])[0] or source.get("timestamp")
+                    last_hit_source = last_hit.get("_source", {}) or {}
+                    new_ts = last_hit.get("sort", [None])[0] or last_hit_source.get("timestamp")
+                    state["last_fetch_timestamp"] = new_ts
                     state["last_sort"] = last_hit.get("sort")
                     save_state(state)
-                    logger.info("Wrote %s normalized events to disk; advanced timestamp to %s", count, state["last_fetch_timestamp"])
+                    logger.info(
+                        "Wrote %s normalized events to disk; advanced timestamp to %s",
+                        count,
+                        state["last_fetch_timestamp"],
+                    )
             else:
                 logger.info("No new documents found after %s", state.get("last_fetch_timestamp"))
 
