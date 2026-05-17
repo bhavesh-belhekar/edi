@@ -1,8 +1,6 @@
-<decoder name="synthetic-json-base">
-  <prematch>"event_type"</prematch>
-</decoder>
+<!-- STEP 2: Decode newline-delimited JSON synthetic telemetry. -->
 
-<decoder name="synthetic-json-child">
-  <parent>synthetic-json-base</parent>
+<decoder name="synthetic_telemetry_json">
+  <prematch>"event_id":</prematch>
   <plugin_decoder>JSON_Decoder</plugin_decoder>
 </decoder>

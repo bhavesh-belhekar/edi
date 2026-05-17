@@ -1,161 +1,38 @@
 <group name="synthetic_telemetry,">
-
-  <!-- BASE RULE -->
-  <rule id="100000" level="3">
+  <rule id="110000" level="3">
     <if_sid>86600</if_sid>
     <field name="event_id">\.+</field>
-    <description>Synthetic Telemetry Event Received.</description>
-    <options>no_full_log</options>
+    <description>Synthetic telemetry event received: $(event_type)</description>
   </rule>
 
-  <!-- ================= AUTH RULES (100001 - 100099) ================= -->
-  <rule id="100001" level="5">
-    <if_sid>100000</if_sid>
+  <rule id="110001" level="7">
+    <if_sid>110000</if_sid>
+    <field name="severity">warning</field>
+    <description>Synthetic warning event: $(event_type)</description>
+  </rule>
+
+  <rule id="110002" level="10">
+    <if_sid>110000</if_sid>
+    <field name="severity">high</field>
+    <description>Synthetic high severity event: $(event_type)</description>
+  </rule>
+
+  <rule id="110003" level="12">
+    <if_sid>110000</if_sid>
+    <field name="severity">critical</field>
+    <description>Synthetic critical event: $(event_type)</description>
+  </rule>
+
+  <rule id="110004" level="8">
+    <if_sid>110000</if_sid>
     <field name="event_type">failed_login</field>
-    <description>Auth: Failed login attempt by user $(user.username)</description>
-    <mitre>
-      <id>T1078</id>
-    </mitre>
+    <description>Synthetic failed login for user $(user.username)</description>
   </rule>
 
-  <rule id="100002" level="10" frequency="5" timeframe="60">
-    <if_matched_sid>100001</if_matched_sid>
-    <same_field>user.username</same_field>
-    <description>Auth: Brute force attempt detected against $(user.username)</description>
-    <mitre>
-      <id>T1110</id>
-      <id>T1110.001</id>
-    </mitre>
-  </rule>
-
-  <rule id="100003" level="12">
-    <if_sid>100000</if_sid>
-    <field name="event_type">failed_login|successful_login</field>
-    <field name="behavioral_features.odd_hour_activity">true</field>
-    <description>Auth: Login activity outside business hours by $(user.username)</description>
-    <mitre>
-      <id>T1078</id>
-    </mitre>
-  </rule>
-
-  <!-- ================= ENDPOINT RULES (100100 - 100199) ================= -->
-  <rule id="100100" level="12">
-    <if_sid>100000</if_sid>
-    <field name="event_type">suspicious_powershell</field>
-    <description>Endpoint: Suspicious PowerShell execution detected: $(process.command_line)</description>
-    <mitre>
-      <id>T1059.001</id>
-    </mitre>
-  </rule>
-
-  <rule id="100101" level="12">
-    <if_sid>100000</if_sid>
-    <field name="process.command_line">-enc|-e |[B|b]ase64|Hidden|Bypass</field>
-    <description>Endpoint: Encoded or obfuscated command execution</description>
-    <mitre>
-      <id>T1027</id>
-    </mitre>
-  </rule>
-
-  <rule id="100102" level="10">
-    <if_sid>100000</if_sid>
-    <field name="event_type">process_start</field>
-    <field name="process.parent_process_name">winword.exe|excel.exe|powerpnt.exe</field>
-    <field name="process.name">cmd.exe|powershell.exe|wscript.exe</field>
-    <description>Endpoint: Suspicious parent-child process relationship (Office spawning shell)</description>
-    <mitre>
-      <id>T1566.001</id>
-    </mitre>
-  </rule>
-
-  <rule id="100103" level="12">
-    <if_sid>100000</if_sid>
-    <field name="event_type">privilege_escalation|sudo_command</field>
-    <description>Endpoint: Privilege escalation or sudo command detected</description>
-    <mitre>
-      <id>T1068</id>
-    </mitre>
-  </rule>
-
-  <!-- ================= DNS RULES (100200 - 100299) ================= -->
-  <rule id="100200" level="10">
-    <if_sid>100000</if_sid>
-    <field name="event_type">dns_tunneling|dns_query</field>
-    <field name="dns.query_type">TXT|ANY</field>
-    <description>DNS: Possible DNS Tunneling detected (TXT/ANY query)</description>
-    <mitre>
-      <id>T1071.004</id>
-    </mitre>
-  </rule>
-
-  <rule id="100201" level="10">
-    <if_sid>100000</if_sid>
-    <field name="event_type">dns_query</field>
-    <field name="behavioral_features.high_entropy_domain">true</field>
-    <description>DNS: High entropy domain query detected (Possible DGA) - $(dns.queried_domain)</description>
-    <mitre>
-      <id>T1568.002</id>
-    </mitre>
-  </rule>
-
-  <!-- ================= FIREWALL/NETWORK RULES (100300 - 100399) ================= -->
-  <rule id="100300" level="12">
-    <if_sid>100000</if_sid>
-    <field name="event_type">firewall_allow</field>
-    <field name="firewall.direction">outbound</field>
-    <field name="behavioral_features.beaconing_detected">true</field>
-    <description>Network: Beaconing activity detected to $(destination.ip)</description>
-    <mitre>
-      <id>T1071</id>
-      <id>T1571</id>
-    </mitre>
-  </rule>
-
-  <rule id="100301" level="12">
-    <if_sid>100000</if_sid>
+  <rule id="110005" level="12">
+    <if_sid>110000</if_sid>
     <field name="event_type">firewall_allow|firewall_deny</field>
-    <field name="detection.risk_level">critical|high</field>
-    <description>Network: High risk firewall activity from $(source.ip)</description>
-    <mitre>
-      <id>T1041</id>
-    </mitre>
-  </rule>
-
-  <!-- ================= PROXY RULES (100400 - 100499) ================= -->
-  <rule id="100400" level="15">
-    <if_sid>100000</if_sid>
-    <field name="event_type">malware_download|proxy_request</field>
-    <field name="proxy.category">malware|phishing|botnet</field>
-    <description>Proxy: Malicious category requested - $(proxy.url)</description>
-    <mitre>
-      <id>T1204.002</id>
-    </mitre>
-  </rule>
-
-  <rule id="100401" level="10">
-    <if_sid>100000</if_sid>
-    <field name="event_type">proxy_request</field>
-    <field name="proxy.user_agent" type="pcre2">curl|wget|python-requests|nmap</field>
-    <description>Proxy: Suspicious User-Agent detected - $(proxy.user_agent)</description>
-    <mitre>
-      <id>T1071</id>
-    </mitre>
-  </rule>
-
-  <!-- ================= ML/AI CORRELATION FALLBACKS (100500+) ================= -->
-  <rule id="100500" level="12">
-    <if_sid>100000</if_sid>
-    <field name="detection.risk_score" type="pcre2">^[89]\d|100</field>
-    <description>AI: Event automatically flagged with high risk score: $(detection.risk_score)</description>
-  </rule>
-
-  <rule id="100501" level="12">
-    <if_sid>100000</if_sid>
-    <field name="mitre_attack.technique_id" type="pcre2">^T\d{4}</field>
-    <description>AI: Telemetry mapped automatically to $(mitre_attack.technique_id)</description>
-    <mitre>
-      <id>$(mitre_attack.technique_id)</id>
-    </mitre>
+    <description>Synthetic firewall security event: $(event_type)</description>
   </rule>
 
 </group>

@@ -1,0 +1,13 @@
+cluster.name: wazuh-local-dev
+node.name: wazuh.indexer
+network.host: 0.0.0.0
+discovery.type: single-node
+bootstrap.memory_lock: true
+
+# Local development only: disable OpenSearch/Wazuh Indexer security so Step 3
+# can run over HTTP without certificate generation.
+plugins.security.disabled: true
+plugins.security.ssl.http.enabled: false
+plugins.security.ssl.transport.enabled: false
+
+compatibility.override_main_response_version: true
