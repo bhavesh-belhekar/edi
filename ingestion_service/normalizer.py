@@ -313,6 +313,19 @@ class EventNormalizer:
                 payload.get("message"),
             )
         )
+        
+        # Parse raw_log as JSON if possible - it contains the enriched source data
+        raw_log_parsed = None
+        if raw_log:
+            try:
+                raw_log_parsed = json.loads(raw_log)
+            except (json.JSONDecodeError, TypeError):
+                raw_log_parsed = None
+        
+        # Merge raw_log_parsed into source_doc for field extraction
+        if isinstance(raw_log_parsed, Mapping):
+            source_doc = {**raw_log_parsed, **source_doc}  # source_doc takes precedence
+        
         event_type = self.infer_event_type(source_doc, raw_log)
         event_id = self.extract_event_id(hit)
 

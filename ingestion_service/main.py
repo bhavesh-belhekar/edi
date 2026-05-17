@@ -9,10 +9,12 @@ from typing import Any, List
 
 from checkpoint import CheckpointStore
 from config import IngestionSettings, settings
+from enricher import enrich_event
 from fetcher import IncrementalFetcher
 from models import NormalizedEvent
 from normalizer import EventNormalizer
 from opensearch_client import OpenSearchClient
+from split_writer import SplitEventWriter
 from writer import NDJSONWriter
 
 
@@ -101,8 +103,9 @@ def process_one_cycle(
     normalizer: EventNormalizer,
     checkpoint_store: CheckpointStore,
     writer: NDJSONWriter,
+    split_writer: SplitEventWriter,
 ) -> tuple[int, int]:
-    """Fetch, normalize, deduplicate, persist, and checkpoint one polling cycle."""
+    """Fetch, normalize, enrich, deduplicate, persist, and checkpoint one polling cycle."""
 
     fetched_count = 0
     normalized_count = 0
@@ -118,13 +121,34 @@ def process_one_cycle(
             if checkpoint_store.is_duplicate(event_id) or event_id in batch_seen_ids:
                 continue
 
+            # Normalize the event (now extracts nested JSON from raw_log)
             normalized_event = normalizer.normalize(hit)
+            
+            # Apply in-process enrichment
+            try:
+                normalized_event = enrich_event(normalized_event)
+                LOGGER.debug("event_id=%s enriched type=%s risk_level=%s", 
+                           normalized_event.event_id, 
+                           normalized_event.event_type,
+                           normalized_event.detection.risk_level if normalized_event.detection else None)
+            except Exception as e:
+                LOGGER.warning(
+                    "event_id=%s enrichment failed (continuing): %s",
+                    normalized_event.event_id,
+                    e,
+                )
+            
             normalized_events.append(normalized_event)
             pending_updates.append((normalized_event, hit.get("sort")))
             batch_seen_ids.add(normalized_event.event_id)
 
         if normalized_events:
+            # Write to main normalized output
             written = writer.append(normalized_events)
+            
+            # Write to split enriched outputs
+            split_written = split_writer.write(normalized_events)
+            
             normalized_count += written
             for normalized_event, sort_values in pending_updates:
                 checkpoint_store.advance(
@@ -134,9 +158,10 @@ def process_one_cycle(
                 )
             checkpoint_store.save()
             LOGGER.info(
-                "event=batch_written fetched=%s normalized=%s checkpoint_timestamp=%s",
+                "event=batch_written fetched=%s normalized=%s enriched=%s checkpoint_timestamp=%s",
                 len(batch),
                 written,
+                split_written,
                 checkpoint_store.state.last_timestamp,
             )
 
@@ -147,6 +172,8 @@ def run() -> None:
     """Run the continuous ingestion loop."""
 
     configure_logging()
+    LOGGER.info("event=ingestion_service_start version=1.0 enrichment=enabled_internal")
+    
     client = OpenSearchClient(settings)
     wait_for_opensearch(client, settings)
 
@@ -154,26 +181,35 @@ def run() -> None:
     fetcher = IncrementalFetcher(client, settings)
     normalizer = EventNormalizer()
     writer = NDJSONWriter(settings.output_path)
+    
+    # Initialize split writer for enriched outputs
+    # settings.output_path is a Path object like /app/logs/normalized_events.ndjson
+    # We want to write enriched events to the logs directory with split files
+    from pathlib import Path
+    output_path_obj = Path(settings.output_path)
+    processed_events_dir = str(output_path_obj.parent)  # Get /app/logs/ directory
+    split_writer = SplitEventWriter(processed_events_dir)
 
     bootstrap_checkpoint_if_needed(fetcher, checkpoint_store, settings)
 
     LOGGER.info(
-        "event=ingestion_loop_started poll_interval=%s batch_size=%s output_path=%s checkpoint_path=%s",
+        "event=ingestion_loop_started poll_interval=%s batch_size=%s normalized_path=%s processed_path=%s",
         settings.poll_interval_seconds,
         settings.batch_size,
         settings.output_path,
-        settings.checkpoint_path,
+        processed_events_dir,
     )
 
     while True:
         try:
-            fetched_count, normalized_count = process_one_cycle(fetcher, normalizer, checkpoint_store, writer)
-            LOGGER.info(
-                "event=cycle_completed fetched_events=%s normalized_events=%s checkpoint_timestamp=%s",
-                fetched_count,
-                normalized_count,
-                checkpoint_store.state.last_timestamp,
-            )
+            fetched_count, normalized_count = process_one_cycle(fetcher, normalizer, checkpoint_store, writer, split_writer)
+            if fetched_count > 0:
+                LOGGER.info(
+                    "event=cycle_completed fetched=%s normalized=%s checkpoint_timestamp=%s",
+                    fetched_count,
+                    normalized_count,
+                    checkpoint_store.state.last_timestamp,
+                )
         except Exception as error:
             LOGGER.exception("event=ingestion_cycle_error error=%s", error)
             time.sleep(settings.retry_backoff_seconds)

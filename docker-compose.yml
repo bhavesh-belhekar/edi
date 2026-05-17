@@ -146,9 +146,13 @@ services:
       OUTPUT_PATH: /app/logs/normalized_events.ndjson
       MAX_RETRIES: 12
       RETRY_BACKOFF_SECONDS: 5
+      PYTHONPATH: /app
     volumes:
       - ./ingestion_service/logs:/app/logs
       - ./ingestion_service/state:/app/state
+      - ./ingestion_service/processed_events:/app/processed_events
+      - ./src:/app/src
+      - ./shared:/app/shared
     command: ["python", "main.py"]
 
 volumes:
