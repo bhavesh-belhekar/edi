@@ -11,6 +11,7 @@ __pycache__/
 # Generated Telemetry Datasets
 synthetic_logs/output/*.ndjson
 synthetic_logs/output/*.log
+wazuh_logs/
 
 # Ingestion runtime artifacts
 ingestion_service/logs/
