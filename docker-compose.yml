@@ -123,6 +123,46 @@ services:
       retries: 20
       start_period: 120s
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: incidents
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d incidents"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rabbitmq_broker
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   ingestion.service:
     build:
       context: ./ingestion_service
@@ -133,12 +173,20 @@ services:
     depends_on:
       wazuh.indexer:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
+      PYTHONPATH: /app
+      PYTHONUNBUFFERED: "1"
+      # OpenSearch
       OPENSEARCH_HOST: wazuh.indexer
       OPENSEARCH_PORT: 9200
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: admin
       OPENSEARCH_INDEX_PATTERN: wazuh-alerts-*
+      # Polling
       POLL_INTERVAL_SECONDS: 5
       BATCH_SIZE: 200
       REQUEST_TIMEOUT_SECONDS: 30
@@ -146,10 +194,23 @@ services:
       OUTPUT_PATH: /app/logs/normalized_events.ndjson
       MAX_RETRIES: 12
       RETRY_BACKOFF_SECONDS: 5
+      # PostgreSQL
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: incidents
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      RABBITMQ_QUEUE: ml_pipeline
     volumes:
+      - ./:/app
       - ./ingestion_service/logs:/app/logs
       - ./ingestion_service/state:/app/state
-    command: ["python", "main.py"]
+    command: ["python", "/app/ingestion_service/main.py"]
 
 volumes:
   wazuh_indexer_data:
@@ -163,3 +224,5 @@ volumes:
   wazuh_manager_wodles:
   wazuh_filebeat_etc:
   wazuh_filebeat_var:
+  postgres_data:
+  rabbitmq_data:
