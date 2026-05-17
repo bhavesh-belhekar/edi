@@ -1,24 +1,37 @@
 # Python OpenSearch Ingestion Service
 
-This service continuously polls OpenSearch for new Wazuh alert documents, normalizes them to a shared security event schema, prevents duplicate processing, and writes clean JSON to a local NDJSON file.
+This service continuously polls OpenSearch for new Wazuh alert documents, filters on `rule.groups = synthetic_telemetry`, normalizes the events into the unified schema, and appends them to a local NDJSON file.
 
-## Behavior
+## Runtime layout
 
-- Connects to OpenSearch at `http://wazuh.indexer:9200`
-- Bootstraps against the latest existing document timestamp on first run
-- Fetches only new documents with `@timestamp > last_fetched_timestamp`
-- Normalizes data into the shared `SecurityEvent` contract
-- Deduplicates by `event_id` and OpenSearch `_id`
-- Persists clean JSON to `output/normalized_events_<YYYYMMDD>.ndjson`
-- Stores ingestion state in `/app/state/last_fetch_state.json`
+- `main.py` orchestrates the service loop
+- `config.py` loads environment settings
+- `opensearch_client.py` handles the OpenSearch connection
+- `fetcher.py` paginates only new telemetry events
+- `normalizer.py` maps OpenSearch hits to the normalized event model
+- `checkpoint.py` persists restart-safe progress in `checkpoint.json`
+- `writer.py` appends normalized records to `logs/normalized_events.ndjson`
 
-## Running locally
+## Environment variables
+
+- `OPENSEARCH_HOST`
+- `OPENSEARCH_PORT`
+- `OPENSEARCH_USERNAME`
+- `OPENSEARCH_PASSWORD`
+- `OPENSEARCH_INDEX_PATTERN`
+- `POLL_INTERVAL_SECONDS`
+- `BATCH_SIZE`
+- `REQUEST_TIMEOUT_SECONDS`
+- `CHECKPOINT_PATH`
+- `OUTPUT_PATH`
+
+## Local run
 
 ```bash
-cd /mnt/d/edi/ingestion_service
+cd ingestion_service
 python main.py
 ```
 
 ## Dockerized service
 
-The root `docker-compose.yml` defines this service as `ingestion.service` and mounts the local code for development.
+The root `docker-compose.yml` runs this service as `ingestion.service`, mounts `ingestion_service/checkpoint.json`, and persists normalized output under `ingestion_service/logs/`.

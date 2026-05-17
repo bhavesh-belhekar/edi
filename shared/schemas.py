@@ -161,7 +161,9 @@ class SecurityEvent(BaseModel):
     proxy: Optional[ProxyInfo] = None
 
     # Analytical State Blocks (Auto-instantiated with defaults)
-    behavioral_features: BehavioralFeatures = Field(default_factory=lambda: BehavioralFeatures())  # type: ignore[call-arg]
+    behavioral_features: BehavioralFeatures = Field(
+        default_factory=lambda: BehavioralFeatures(),  # type: ignore[call-arg]
+    )
     detection: DetectionInfo = Field(
         default_factory=lambda: DetectionInfo(),  # type: ignore[call-arg]
     )

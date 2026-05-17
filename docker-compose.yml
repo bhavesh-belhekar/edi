@@ -131,22 +131,24 @@ services:
     hostname: ingestion.service
     restart: unless-stopped
     depends_on:
-      - wazuh.indexer
+      wazuh.indexer:
+        condition: service_healthy
     environment:
       OPENSEARCH_HOST: wazuh.indexer
       OPENSEARCH_PORT: 9200
-      OPENSEARCH_USER: admin
+      OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: admin
-      OPENSEARCH_INDEX_PATTERN: wazuh-alerts-4.x-*
-      POLL_INTERVAL_SECONDS: 15
+      OPENSEARCH_INDEX_PATTERN: wazuh-alerts-*
+      POLL_INTERVAL_SECONDS: 5
       BATCH_SIZE: 200
-      OUTPUT_DIR: /app/output
-      STATE_FILE: /app/state/last_fetch_state.json
-      MAX_RETRIES: 5
+      REQUEST_TIMEOUT_SECONDS: 30
+      CHECKPOINT_PATH: /app/state/checkpoint.json
+      OUTPUT_PATH: /app/logs/normalized_events.ndjson
+      MAX_RETRIES: 12
       RETRY_BACKOFF_SECONDS: 5
     volumes:
-      - ./ingestion_service:/app
-      - ./ingestion_service/output:/app/output
+      - ./ingestion_service/logs:/app/logs
+      - ./ingestion_service/state:/app/state
     command: ["python", "main.py"]
 
 volumes:

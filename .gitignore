@@ -12,6 +12,11 @@ __pycache__/
 synthetic_logs/output/*.ndjson
 synthetic_logs/output/*.log
 
+# Ingestion runtime artifacts
+ingestion_service/logs/
+ingestion_service/state/
+ingestion_service/checkpoint.json
+
 # IDEs
 .vscode/
 .idea/
