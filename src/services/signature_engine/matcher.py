@@ -19,9 +19,10 @@ from enum import Enum
 from shared.logger import get_logger
 from shared.schemas import SecurityEvent
 
-from .fingerprint import generate_fingerprint
+from .fingerprint import generate_fingerprint_data
 from .known_attack_handler import apply_known_attack
-from .store import SignatureStore, StoredSignature
+from .database import FingerprintDB
+from .rabbitmq_publisher import RabbitMQPublisher
 
 logger = get_logger("signature.matcher")
 
@@ -41,42 +42,70 @@ class MatchResult:
 
 
 def match_event(
-    event: SecurityEvent, store: SignatureStore
+    event: SecurityEvent, db: FingerprintDB, publisher: RabbitMQPublisher
 ) -> MatchResult:
-    """Generate fingerprint, look up store, and route the event."""
+    """Generate fingerprint, look up PostgreSQL, and route the event."""
 
-    fingerprint = generate_fingerprint(event)
+    fingerprint_hash, fingerprint_string = generate_fingerprint_data(event)
 
-    stored = store.lookup(fingerprint)
+    stored = db.check_fingerprint(fingerprint_hash)
 
-    if stored is not None:
-        event = apply_known_attack(event, stored)
+    # Debug logging for fingerprint details
+    src_ip = event.source.ip if event.source else "N/A"
+    dst_ip = event.destination.ip if event.destination else "N/A"
+    user = event.user.username if event.user and event.user.username else "N/A"
+    chain = event.correlation.attack_chain_id if event.correlation and event.correlation.attack_chain_id else "N/A"
+    
+    if stored is not None and stored.get("known_attack") is True:
+        db.update_fingerprint_seen(stored["id"])
+        
         logger.info(
-            "event_id=%s → KNOWN ATTACK (fp=%s)",
+            "event_id=%s classification=KNOWN fingerprint=%s reason=matched_in_db "
+            "event_type=%s src_ip=%s dst_ip=%s user=%s chain=%s",
             event.event_id,
-            fingerprint[:16],
+            fingerprint_hash[:16],
+            event.event_type,
+            src_ip,
+            dst_ip,
+            user,
+            chain[:20] if chain != "N/A" else "N/A",
         )
         return MatchResult(
             event=event,
             classification=AttackClassification.KNOWN,
-            fingerprint=fingerprint,
+            fingerprint=fingerprint_hash,
         )
 
-    # New attack — store the fingerprint for future matches and let the
-    # event continue to the heavy-analysis pipeline (RabbitMQ → ML).
-    new_sig = StoredSignature(
-        fingerprint=fingerprint,
-        event_type=event.event_type,
-    )
-    store.store(new_sig)
+    # New attack — store the fingerprint and publish to RabbitMQ
+    if stored is None:
+        db.store_new_fingerprint(fingerprint_hash, fingerprint_string)
+        logger.info(
+            "event_id=%s classification=NEW fingerprint=%s reason=new_pattern_stored "
+            "event_type=%s src_ip=%s dst_ip=%s user=%s",
+            event.event_id,
+            fingerprint_hash[:16],
+            event.event_type,
+            src_ip,
+            dst_ip,
+            user,
+        )
+    else:
+        logger.info(
+            "event_id=%s classification=NEW fingerprint=%s reason=not_known_attack "
+            "event_type=%s src_ip=%s dst_ip=%s user=%s",
+            event.event_id,
+            fingerprint_hash[:16],
+            event.event_type,
+            src_ip,
+            dst_ip,
+            user,
+        )
 
-    logger.info(
-        "event_id=%s → NEW ATTACK (fp=%s)",
-        event.event_id,
-        fingerprint[:16],
-    )
+    # Publish to RabbitMQ queue: unknown_attack_events
+    publisher.publish_unknown_attack(event.model_dump(mode="json"))
+
     return MatchResult(
         event=event,
         classification=AttackClassification.NEW,
-        fingerprint=fingerprint,
+        fingerprint=fingerprint_hash,
     )

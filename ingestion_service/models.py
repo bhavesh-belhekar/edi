@@ -133,6 +133,11 @@ class NullableBehavioralFeatures(BaseModel):
     high_entropy_domain: Optional[bool] = None
     new_domain_observed: Optional[bool] = None
     beaconing_detected: Optional[bool] = None
+    ip_classification: Optional[str] = None
+    is_privileged_user: Optional[bool] = None
+    high_frequency: Optional[bool] = None
+    sensitive_source_asset: Optional[bool] = None
+    sensitive_destination_asset: Optional[bool] = None
 
 
 class NullableDetectionInfo(BaseModel):

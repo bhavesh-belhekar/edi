@@ -16,6 +16,13 @@ from normalizer import EventNormalizer
 from opensearch_client import OpenSearchClient
 from split_writer import SplitEventWriter
 from writer import NDJSONWriter
+from pydantic import ValidationError
+
+# -- Import SOC Pipeline components --
+from shared.schemas import SecurityEvent
+from src.services.signature_engine.matcher import match_event
+from src.services.signature_engine.database import FingerprintDB
+from src.services.signature_engine.rabbitmq_publisher import RabbitMQPublisher
 
 
 LOGGER = logging.getLogger("ingestion_service")
@@ -104,6 +111,8 @@ def process_one_cycle(
     checkpoint_store: CheckpointStore,
     writer: NDJSONWriter,
     split_writer: SplitEventWriter,
+    fingerprint_db: FingerprintDB,
+    rabbitmq_publisher: RabbitMQPublisher,
 ) -> tuple[int, int]:
     """Fetch, normalize, enrich, deduplicate, persist, and checkpoint one polling cycle."""
 
@@ -123,6 +132,7 @@ def process_one_cycle(
 
             # Normalize the event (now extracts nested JSON from raw_log)
             normalized_event = normalizer.normalize(hit)
+            event_valid = True
             
             # Apply in-process enrichment
             try:
@@ -131,16 +141,41 @@ def process_one_cycle(
                            normalized_event.event_id, 
                            normalized_event.event_type,
                            normalized_event.detection.risk_level if normalized_event.detection else None)
+                
+                # --- STEP 1 & 2 & 3: Pass to Signature/Fingerprint Engine ---
+                # Convert NormalizedEvent to SecurityEvent for the pipeline
+                sec_event = SecurityEvent.model_validate(normalized_event.model_dump(mode="json", exclude_none=True))
+                
+                match_result = match_event(
+                    event=sec_event,
+                    db=fingerprint_db,
+                    publisher=rabbitmq_publisher
+                )
+                
+                # Update our normalized_event with the result (if modifications were made)
+                normalized_event = NormalizedEvent.model_validate(match_result.event.model_dump(mode="json"))
+
+            except ValidationError as ve:
+                failed_fields = [e["loc"][0] if e["loc"] else "unknown" for e in ve.errors()]
+                LOGGER.error(
+                    "event_id=%s validation failed fields=%s error=%s - skipping event",
+                    normalized_event.event_id,
+                    failed_fields,
+                    str(ve),
+                )
+                event_valid = False
+
             except Exception as e:
                 LOGGER.warning(
-                    "event_id=%s enrichment failed (continuing): %s",
+                    "event_id=%s enrichment/signature failed (continuing): %s",
                     normalized_event.event_id,
                     e,
                 )
             
-            normalized_events.append(normalized_event)
-            pending_updates.append((normalized_event, hit.get("sort")))
-            batch_seen_ids.add(normalized_event.event_id)
+            if event_valid:
+                normalized_events.append(normalized_event)
+                pending_updates.append((normalized_event, hit.get("sort")))
+                batch_seen_ids.add(normalized_event.event_id)
 
         if normalized_events:
             # Write to main normalized output
@@ -190,6 +225,10 @@ def run() -> None:
     processed_events_dir = str(output_path_obj.parent)  # Get /app/logs/ directory
     split_writer = SplitEventWriter(processed_events_dir)
 
+    # Initialize Signature Engine connections
+    fingerprint_db = FingerprintDB()
+    rabbitmq_publisher = RabbitMQPublisher()
+
     bootstrap_checkpoint_if_needed(fetcher, checkpoint_store, settings)
 
     LOGGER.info(
@@ -202,7 +241,9 @@ def run() -> None:
 
     while True:
         try:
-            fetched_count, normalized_count = process_one_cycle(fetcher, normalizer, checkpoint_store, writer, split_writer)
+            fetched_count, normalized_count = process_one_cycle(
+                fetcher, normalizer, checkpoint_store, writer, split_writer, fingerprint_db, rabbitmq_publisher
+            )
             if fetched_count > 0:
                 LOGGER.info(
                     "event=cycle_completed fetched=%s normalized=%s checkpoint_timestamp=%s",

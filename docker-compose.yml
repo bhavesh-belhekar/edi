@@ -133,6 +133,10 @@ services:
     depends_on:
       wazuh.indexer:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
       OPENSEARCH_HOST: wazuh.indexer
       OPENSEARCH_PORT: 9200
@@ -147,6 +151,15 @@ services:
       MAX_RETRIES: 12
       RETRY_BACKOFF_SECONDS: 5
       PYTHONPATH: /app
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpassword
+      POSTGRES_DB: cyber_intelligence
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: admin
+      RABBITMQ_PASSWORD: adminpassword
     volumes:
       - ./ingestion_service/logs:/app/logs
       - ./ingestion_service/state:/app/state
@@ -154,6 +167,120 @@ services:
       - ./src:/app/src
       - ./shared:/app/shared
     command: ["python", "main.py"]
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    hostname: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpassword
+      POSTGRES_DB: cyber_intelligence
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db_migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d cyber_intelligence"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: adminpassword
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ml.worker.consumer:
+    build:
+      context: ./ingestion_service
+      dockerfile: Dockerfile
+    container_name: ml_worker_consumer
+    hostname: ml.worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpassword
+      POSTGRES_DB: cyber_intelligence
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: admin
+      RABBITMQ_PASSWORD: adminpassword
+      OLLAMA_URL: "http://ollama:11434/api/generate"
+      PYTHONPATH: /app
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+    command: ["python", "/app/src/services/ml_workers/consumer.py"]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    hostname: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  api.gateway:
+    build: 
+      context: ./src/services/api_gateway
+      dockerfile: Dockerfile
+    container_name: api_gateway
+    hostname: api.gateway
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: adminpassword
+      POSTGRES_DB: cyber_intelligence
+
+  dashboard.frontend:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: dashboard_frontend
+    hostname: dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:5173"
+    depends_on:
+      - api.gateway
 
 volumes:
   wazuh_indexer_data:
@@ -167,3 +294,6 @@ volumes:
   wazuh_manager_wodles:
   wazuh_filebeat_etc:
   wazuh_filebeat_var:
+  postgres_data:
+  rabbitmq_data:
+  ollama_data:

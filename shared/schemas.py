@@ -85,44 +85,49 @@ class ProxyInfo(BaseModel):
 
 
 class BehavioralFeatures(BaseModel):
-    login_frequency: int = Field(0, description="Logins observed within the sliding window")
-    failed_attempts: int = Field(0, description="Failed attempts within the sliding window")
-    time_window_seconds: int = Field(60, description="Window size in seconds")
-    odd_hour_activity: bool = Field(False, description="True if activity occurs outside standard baseline hours")
+    login_frequency: Optional[int] = Field(None, description="Logins observed within the sliding window")
+    failed_attempts: Optional[int] = Field(None, description="Failed attempts within the sliding window")
+    time_window_seconds: Optional[int] = Field(None, description="Window size in seconds")
+    odd_hour_activity: Optional[bool] = Field(None, description="True if activity occurs outside standard baseline hours")
 
     # DNS / Network Behavioral Features
-    query_frequency: int = Field(0, description="Number of DNS queries in rolling window")
-    high_entropy_domain: bool = Field(False, description="True if domain name has high entropy")
-    new_domain_observed: bool = Field(False, description="True if domain is newly observed")
-    beaconing_detected: bool = Field(False, description="True if periodic beaconing pattern is detected")
+    query_frequency: Optional[int] = Field(None, description="Number of DNS queries in rolling window")
+    high_entropy_domain: Optional[bool] = Field(None, description="True if domain name has high entropy")
+    new_domain_observed: Optional[bool] = Field(None, description="True if domain is newly observed")
+    beaconing_detected: Optional[bool] = Field(None, description="True if periodic beaconing pattern is detected")
+    ip_classification: Optional[str] = Field(None, description="Categorization of source IP as internal or external")
+    is_privileged_user: Optional[bool] = Field(None, description="True if the user is a known privileged user (admin, root)")
+    high_frequency: Optional[bool] = Field(None, description="True if high frequency activity is detected")
+    sensitive_source_asset: Optional[bool] = Field(None, description="True if the source is considered a sensitive asset")
+    sensitive_destination_asset: Optional[bool] = Field(None, description="True if the destination is considered a sensitive asset")
 
 
 class DetectionInfo(BaseModel):
-    signature_match: bool = Field(False, description="True if matched via fingerprint Fast Path")
-    anomaly_score: float = Field(0.0, description="ML Output: Isolation Forest/LOF outlier score")
-    ueba_score: float = Field(0.0, description="ML Output: Behavioral deviation confidence")
-    risk_score: float = Field(0.0, description="Fidelity Engine Output: Combined final risk calculation")
-    risk_level: str = Field("low", description="Categorical risk (low, medium, high, critical)")
+    signature_match: Optional[bool] = Field(None, description="True if matched via fingerprint Fast Path")
+    anomaly_score: Optional[float] = Field(None, description="ML Output: Isolation Forest/LOF outlier score")
+    ueba_score: Optional[float] = Field(None, description="ML Output: Behavioral deviation confidence")
+    risk_score: Optional[float] = Field(None, description="Fidelity Engine Output: Combined final risk calculation")
+    risk_level: Optional[str] = Field(None, description="Categorical risk (low, medium, high, critical)")
 
 
 class CorrelationInfo(BaseModel):
     attack_chain_id: Optional[str] = Field(None, description="UUID of the correlated multi-stage attack graph")
     session_id: Optional[str] = Field(None, description="User or host interactive session ID")
     parent_event_id: Optional[str] = Field(None, description="Parent event UUID")
-    related_events: List[str] = Field(default_factory=list, description="List of related event UUIDs")
+    related_events: Optional[List[str]] = Field(None, description="List of related event UUIDs")
 
 
 class MITREAttackInfo(BaseModel):
     technique_id: Optional[str] = Field(None, description="MITRE Technique ID (e.g., T1110)")
     technique_name: Optional[str] = Field(None, description="MITRE Technique Name")
     tactic: Optional[str] = Field(None, description="MITRE Tactic (e.g., Credential Access)")
-    confidence: float = Field(0.0, description="Confidence in this mapping mapping (0.0 - 1.0)")
+    confidence: Optional[float] = Field(None, description="Confidence in this mapping mapping (0.0 - 1.0)")
 
 
 class PlaybookInfo(BaseModel):
     playbook_id: Optional[str] = Field(None, description="UUID of the generated response playbook")
-    generated: bool = Field(False, description="True if a playbook has been fully built")
-    status: str = Field("none", description="Playbook lifecycle status (none, pending, active, completed)")
+    generated: Optional[bool] = Field(None, description="True if a playbook has been fully built")
+    status: Optional[str] = Field(None, description="Playbook lifecycle status (none, pending, active, completed)")
 
 
 # ==============================================================================
@@ -160,25 +165,12 @@ class SecurityEvent(BaseModel):
     firewall: Optional[FirewallInfo] = None
     proxy: Optional[ProxyInfo] = None
 
-    # Analytical State Blocks (Auto-instantiated with defaults)
-    behavioral_features: BehavioralFeatures = Field(
-        default_factory=lambda: BehavioralFeatures(),  # type: ignore[call-arg]
-    )
-    detection: DetectionInfo = Field(
-        default_factory=lambda: DetectionInfo(),  # type: ignore[call-arg]
-    )
-
-    correlation: CorrelationInfo = Field(
-        default_factory=lambda: CorrelationInfo(),  # type: ignore[call-arg]
-    )
-
-    mitre_attack: MITREAttackInfo = Field(
-        default_factory=lambda: MITREAttackInfo(),  # type: ignore[call-arg]
-    )
-
-    playbook: PlaybookInfo = Field(
-        default_factory=lambda: PlaybookInfo(),  # type: ignore[call-arg]
-    )
+    # Analytical State Blocks (Optional - may be None if enrichment stages not yet executed)
+    behavioral_features: Optional[BehavioralFeatures] = None
+    detection: Optional[DetectionInfo] = None
+    correlation: Optional[CorrelationInfo] = None
+    mitre_attack: Optional[MITREAttackInfo] = None
+    playbook: Optional[PlaybookInfo] = None
 
     # Immutable Origin
     raw_log: str = Field(
