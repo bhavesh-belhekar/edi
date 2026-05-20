@@ -51,9 +51,8 @@ def get_incidents(conn = Depends(get_db)):
 
 @app.get("/incident-graph/{incident_id}")
 def get_incident_graph(incident_id: str, conn = Depends(get_db)):
-    """Get detailed incident graph with nodes and edges."""
+    """Get detailed incident graph with meaningful attack chain visualization."""
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        # Get incident details
         cur.execute("""
             SELECT incident_id, severity, confidence_score, attack_chain_stage,
                    created_at, description, graph_data, timeline, 
@@ -66,21 +65,178 @@ def get_incident_graph(incident_id: str, conn = Depends(get_db)):
         if not incident:
             raise HTTPException(status_code=404, detail="Incident not found")
         
-        # Get correlated events for this incident
-        cur.execute("""
-            SELECT event_id, event_timestamp, correlation_type, 
-                   entity_type, entity_value
-            FROM incident_events
-            WHERE incident_id = %s
-            ORDER BY event_timestamp
-        """, (incident_id,))
-        events = cur.fetchall()
+        nodes = []
+        edges = []
+        entity_map = {}
+        
+        try:
+            linked_entities = incident.get('linked_entities') or {}
+            if isinstance(linked_entities, str):
+                import json
+                linked_entities = json.loads(linked_entities)
+        except:
+            linked_entities = {}
+        
+        src_ips = linked_entities.get('src_ips', []) if linked_entities else []
+        dst_ips = linked_entities.get('dst_ips', []) if linked_entities else []
+        usernames = linked_entities.get('usernames', []) if linked_entities else []
+        hostnames = linked_entities.get('hostnames', []) if linked_entities else []
+        processes = linked_entities.get('processes', []) if linked_entities else []
+        
+        nodes.append({
+            "id": f"incident_{incident_id}",
+            "label": incident_id,
+            "type": "incident",
+            "severity": incident.get('severity'),
+            "attack_stage": incident.get('attack_chain_stage'),
+            "metadata": {
+                "confidence": incident.get('confidence_score'),
+                "event_count": len(incident.get('related_event_ids', [])),
+                "created_at": str(incident.get('created_at', ''))
+            }
+        })
+        
+        for idx, ip in enumerate(src_ips[:3]):
+            node_key = f"src_ip_{ip}"
+            if node_key not in entity_map:
+                entity_map[node_key] = f"attacker_{idx}"
+                nodes.append({
+                    "id": f"attacker_{idx}",
+                    "label": ip,
+                    "type": "source_ip",
+                    "severity": "high",
+                    "metadata": {"role": "attacker", "ip": ip}
+                })
+            edges.append({
+                "from": f"attacker_{idx}",
+                "to": f"incident_{incident_id}",
+                "type": "attack_origin",
+                "label": "attacking"
+            })
+        
+        for idx, ip in enumerate(dst_ips[:3]):
+            node_key = f"dst_ip_{ip}"
+            if node_key not in entity_map:
+                entity_map[node_key] = f"target_{idx}"
+                nodes.append({
+                    "id": f"target_{idx}",
+                    "label": ip,
+                    "type": "destination_ip",
+                    "severity": incident.get('severity'),
+                    "metadata": {"role": "target", "ip": ip}
+                })
+            edges.append({
+                "from": f"incident_{incident_id}",
+                "to": f"target_{idx}",
+                "type": "target",
+                "label": "target"
+            })
+        
+        for idx, user in enumerate(usernames[:3]):
+            node_key = f"user_{user}"
+            if node_key not in entity_map:
+                entity_map[node_key] = f"user_{idx}"
+                nodes.append({
+                    "id": f"user_{idx}",
+                    "label": user,
+                    "type": "user",
+                    "severity": "high",
+                    "metadata": {"role": "compromised_account", "username": user}
+                })
+            edges.append({
+                "from": f"incident_{incident_id}",
+                "to": f"user_{idx}",
+                "type": "credential_access",
+                "label": "compromised"
+            })
+        
+        for idx, hostname in enumerate(hostnames[:3]):
+            node_key = f"host_{hostname}"
+            if node_key not in entity_map:
+                entity_map[node_key] = f"host_{idx}"
+                nodes.append({
+                    "id": f"host_{idx}",
+                    "label": hostname,
+                    "type": "hostname",
+                    "severity": incident.get('severity'),
+                    "metadata": {"role": "affected_system", "hostname": hostname}
+                })
+            edges.append({
+                "from": f"incident_{incident_id}",
+                "to": f"host_{idx}",
+                "type": "affects",
+                "label": "compromised"
+            })
+        
+        for idx, process in enumerate(processes[:3]):
+            node_key = f"process_{process}"
+            if node_key not in entity_map:
+                entity_map[node_key] = f"process_{idx}"
+                nodes.append({
+                    "id": f"process_{idx}",
+                    "label": process,
+                    "type": "process",
+                    "severity": "medium",
+                    "metadata": {"role": "suspicious_process", "process": process}
+                })
+            edges.append({
+                "from": f"host_{idx}" if idx < len(hostnames) else f"incident_{incident_id}",
+                "to": f"process_{idx}",
+                "type": "execution",
+                "label": "spawned"
+            })
+        
+        stage = incident.get('attack_chain_stage', 'Unknown')
+        stages = ['Reconnaissance', 'Initial Access', 'Execution', 'Persistence', 
+                  'Privilege Escalation', 'Credential Access', 'Defense Evasion', 
+                  'Discovery', 'Lateral Movement', 'Collection', 'Command and Control', 'Impact']
+        
+        if stage in stages:
+            stage_idx = stages.index(stage)
+            for i in range(stage_idx + 1):
+                nodes.append({
+                    "id": f"stage_{i}",
+                    "label": stages[i],
+                    "type": "mitre_stage",
+                    "severity": "low",
+                    "metadata": {"tactic": stages[i], "completed": i < stage_idx}
+                })
+                if i > 0:
+                    edges.append({
+                        "from": f"stage_{i-1}",
+                        "to": f"stage_{i}",
+                        "type": "attack_progression",
+                        "label": "progression"
+                    })
+        
+        timeline = []
+        related_ids = incident.get('related_event_ids', [])
+        for idx, evt_id in enumerate(related_ids[:10]):
+            timeline.append({
+                "event_id": evt_id,
+                "timestamp": str(incident.get('created_at', '')),
+                "type": "related_event",
+                "sequence": idx + 1
+            })
         
         return {
-            "incident": incident,
-            "correlated_events": events,
-            "graph": incident.get("graph_data", {"nodes": [], "edges": []}),
-            "timeline": incident.get("timeline", []),
+            "incident": {
+                "incident_id": incident.get('incident_id'),
+                "severity": incident.get('severity'),
+                "confidence_score": incident.get('confidence_score'),
+                "attack_chain_stage": incident.get('attack_chain_stage'),
+                "created_at": str(incident.get('created_at', '')),
+            },
+            "nodes": nodes,
+            "edges": edges,
+            "entity_count": {
+                "source_ips": len(src_ips),
+                "destination_ips": len(dst_ips),
+                "usernames": len(usernames),
+                "hostnames": len(hostnames),
+                "processes": len(processes),
+            },
+            "timeline": timeline,
         }
 
 
@@ -150,6 +306,32 @@ def get_playbooks(conn = Depends(get_db)):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT p.*, f.risk_level FROM playbooks p JOIN fingerprints f ON p.fingerprint_id = f.id")
         return cur.fetchall()
+
+@app.get("/incident-playbooks")
+def get_incident_playbooks(conn = Depends(get_db)):
+    """Get deduplicated playbooks per incident (new aggregated endpoint)."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT ip.*, i.severity, i.attack_chain_stage, i.confidence_score
+            FROM incident_playbooks ip
+            JOIN incidents i ON ip.incident_id = i.incident_id
+            ORDER BY ip.event_count DESC, ip.updated_at DESC
+            LIMIT 100
+        """)
+        return cur.fetchall()
+
+@app.get("/incident-playbook/{incident_id}")
+def get_incident_playbook_detail(incident_id: str, conn = Depends(get_db)):
+    """Get detailed playbook for specific incident."""
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT ip.*, i.severity, i.attack_chain_stage, i.confidence_score, 
+                   i.linked_entities, i.related_event_ids
+            FROM incident_playbooks ip
+            JOIN incidents i ON ip.incident_id = i.incident_id
+            WHERE ip.incident_id = %s
+        """, (incident_id,))
+        return cur.fetchone()
 
 @app.get("/risk-summary")
 def get_risk_summary(conn = Depends(get_db)):

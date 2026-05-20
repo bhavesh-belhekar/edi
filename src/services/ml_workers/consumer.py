@@ -104,43 +104,71 @@ class UnknownAttackConsumer:
             # STEP 3 - D: UEBA
             ueba_result = check_ueba(cleaned_event, features)
 
-            # STEP 4: Correlation (real implementation)
+            # STEP 4: CORRELATION ENGINE - Group events into incidents FIRST
+            # This is the KEY step - group related events before playbook generation
             correlation_result = correlate_event(cleaned_event)
+            incident_id = correlation_result.get('incident_id', 'unknown')
+            related_event_count = correlation_result.get('related_event_count', 0)
+            attack_stage = correlation_result.get('attack_chain_stage', 'Unknown')
+            confidence = correlation_result.get('correlation_strength', 0.5)
+            linked_entities = correlation_result.get('linked_entities', {})
+            
             LOGGER.info(
                 f"event_id={event_id} correlation complete: "
-                f"incident_id={correlation_result.get('incident_id')} "
-                f"stage={correlation_result.get('attack_chain_stage')} "
-                f"related_events={correlation_result.get('related_event_count')} "
-                f"confidence={correlation_result.get('correlation_strength'):.2f}"
+                f"incident_id={incident_id} "
+                f"stage={attack_stage} "
+                f"related_events={related_event_count} "
+                f"confidence={confidence:.2f}"
             )
 
-            # STEP 5: MITRE Mapping
+            # STEP 5: MITRE Mapping (per incident, not per event)
             mitre_result = map_to_mitre(cleaned_event, anomaly_result, ueba_result)
 
-            # STEP 6: Fidelity / Risk Scoring
+            # STEP 6: Fidelity / Risk Scoring (per incident)
             risk_result = calculate_final_risk(
                 anomaly_score=anomaly_result.get("score", 0.5),
                 ueba_score=ueba_result.get("score", 0.5),
                 mitre_confidence=mitre_result.get("confidence", 0.5),
-                correlation_strength=correlation_result.get("correlation_strength", 0.5)
+                correlation_strength=confidence
             )
 
-            # STEP 7: Playbook Generation
-            playbook = generate_playbook(cleaned_event, risk_result, mitre_result)
-            LOGGER.info(f"event_id={event_id} playbook generated id={playbook.get('playbook_id')} "
-                        f"remediation_steps_count={len(playbook.get('remediation_steps', []))}")
+            # STEP 7: Playbook Generation - ONLY for NEW incidents
+            # Do NOT generate playbooks from raw logs - only from correlated incidents
+            from src.services.signature_engine.database import FingerprintDB
+            
+            db_check = FingerprintDB()
+            existing_incident_playbook = db_check.get_incident_playbook(incident_id)
+            
+            playbook = None
+            playbook_action = "skip"
+            
+            if existing_incident_playbook is None:
+                # NEW correlated incident - generate playbook
+                playbook = generate_playbook(cleaned_event, risk_result, mitre_result)
+                playbook_action = "create"
+                LOGGER.info(f"event_id={event_id} NEW correlated incident {incident_id} - generating playbook")
+                
+                # STEP 14: Ollama Enhancement (only for new playbooks)
+                LOGGER.info(f"event_id={event_id} calling Ollama for enhancement...")
+                playbook = enhance_with_llm(playbook, cleaned_event, mitre_result, risk_result)
+                LOGGER.info(f"event_id={event_id} LLM enhancement complete")
+            else:
+                # Existing incident - use existing playbook, don't regenerate
+                playbook = {
+                    "playbook_id": f"pb-{incident_id}",
+                    "remediation_steps": existing_incident_playbook.get("remediation_steps", []),
+                    "analyst_guidance": existing_incident_playbook.get("analyst_guidance", ""),
+                    "incident_summary": f"Correlated incident with {related_event_count} events - using existing playbook"
+                }
+                LOGGER.info(f"event_id={event_id} existing incident {incident_id} - using existing playbook")
+            
+            db_check.close()
 
-            # STEP 14: Ollama LLM Enhancement
-            LOGGER.info(f"event_id={event_id} calling Ollama for enhancement...")
-            playbook = enhance_with_llm(playbook, cleaned_event, mitre_result, risk_result)
-            LOGGER.info(f"event_id={event_id} LLM enhancement complete summary_len={len(playbook.get('incident_summary', ''))}")
-
-            # STEP 8: Store Final Intelligence
+            # STEP 8: Store Intelligence (fingerprint + incident playbook)
             from src.services.signature_engine.database import FingerprintDB
             from src.services.signature_engine.fingerprint import generate_fingerprint_data
             from shared.schemas import SecurityEvent
             
-            # Create SecurityEvent with all required fields
             LOGGER.info(f"event_id={event_id} validating event schema...")
             sec_event = SecurityEvent.model_validate(cleaned_event)
             LOGGER.info(f"event_id={event_id} generating fingerprint...")
@@ -149,17 +177,38 @@ class UnknownAttackConsumer:
 
             LOGGER.info(f"event_id={event_id} connecting to database...")
             db = FingerprintDB()
-            # We check first to get the ID, theoretically when generated it was stored
+            
+            # Store fingerprint
             stored = db.check_fingerprint(fp_hash)
+            fingerprint_id = None
             if stored:
-                db.store_final_intelligence(stored['id'], mitre_result, risk_result, playbook)
-                LOGGER.info(f"event_id={event_id} stored_in_db fingerprint_id={stored['id']}")
+                fingerprint_id = stored['id']
+                db.store_final_intelligence(stored['id'], mitre_result, risk_result, playbook, event_count=related_event_count + 1)
+                LOGGER.info(f"event_id={event_id} fingerprint updated fingerprint_id={stored['id']}")
             else:
-                # Store new fingerprint with intelligence
-                fp_id = db.store_new_fingerprint(fp_hash, fp_string)
-                db.store_final_intelligence(fp_id, mitre_result, risk_result, playbook)
-                LOGGER.info(f"event_id={event_id} new_fingerprint_stored fp_id={fp_id}")
+                fingerprint_id = db.store_new_fingerprint(fp_hash, fp_string)
+                db.store_final_intelligence(fingerprint_id, mitre_result, risk_result, playbook, event_count=1)
+                LOGGER.info(f"event_id={event_id} new_fingerprint_stored fp_id={fingerprint_id}")
+
+            # Store incident-based playbook ONLY for new incidents (deduplication)
+            if existing_incident_playbook is None:
+                linked_fps = [fingerprint_id] if fingerprint_id else []
+                db.store_incident_playbook(
+                    incident_id=incident_id,
+                    event_count=related_event_count + 1,
+                    mitre_data=mitre_result,
+                    risk_data=risk_result,
+                    playbook_data=playbook,
+                    linked_fingerprints=linked_fps
+                )
+                LOGGER.info(f"event_id={event_id} NEW incident_playbook CREATED for {incident_id}")
+            else:
+                LOGGER.info(f"event_id={event_id} incident_playbook already exists for {incident_id}")
+            
             db.close()
+
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            LOGGER.info(f"event_id={event_id} processing complete, message ACKed")
 
             ch.basic_ack(delivery_tag=method.delivery_tag)
             LOGGER.info(f"event_id={event_id} processing complete, message ACKed")

@@ -37,6 +37,9 @@ POSTGRES_CONFIG = {
 CORRELATION_WINDOW_MINUTES = int(os.getenv("CORRELATION_WINDOW_MINUTES", "60"))
 MAX_CORRELATED_EVENTS = int(os.getenv("MAX_CORRELATED_EVENTS", "100"))
 
+# Incident cooldown window - don't create new incident for same entity within this time
+INCIDENT_COOLDOWN_MINUTES = int(os.getenv("INCIDENT_COOLDOWN_MINUTES", "30"))
+
 # MITRE Tactics in chronological attack order
 ATTACK_CHAIN_SEQUENCE = [
     "Reconnaissance",
@@ -174,6 +177,25 @@ class CorrelationDatabase:
                 ON CONFLICT (incident_id, event_id) DO NOTHING
             """, (incident_id, event_id, event_timestamp, correlation_type, entity_type, entity_value))
 
+    def link_entities_to_incident(self, incident_id: str, entities: Dict[str, List[str]], event_id: str):
+        """Update entity_correlation_index to link matching entities to this incident."""
+        conn = self._get_connection()
+        with conn.cursor() as cur:
+            # For each entity type and value, update existing index entries to add incident_id
+            for entity_type, entity_values in entities.items():
+                for entity_value in entity_values:
+                    if not entity_value:
+                        continue
+                    # Update all index entries for this entity to link to this incident
+                    cur.execute("""
+                        UPDATE entity_correlation_index 
+                        SET incident_id = %s
+                        WHERE entity_type = %s 
+                        AND entity_value = %s
+                        AND incident_id IS NULL
+                        AND event_id != %s
+                    """, (incident_id, entity_type, entity_value, event_id))
+
     def index_entity(self, entity_type: str, entity_value: str, event_id: str, 
                      event_timestamp: datetime, incident_id: Optional[str] = None):
         """Index an entity for fast correlation lookups."""
@@ -221,6 +243,36 @@ class CorrelationDatabase:
                 LIMIT %s
             """, (limit,))
             return list(cur.fetchall())
+
+    def find_recent_incident_for_entity(self, entity_type: str, entity_value: str) -> Optional[Dict]:
+        """Find recent incident for same entity within cooldown window."""
+        conn = self._get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Find incidents with matching entity in linked_entities within cooldown window
+            cur.execute("""
+                SELECT * FROM incidents 
+                WHERE linked_entities->>%s = %s
+                AND created_at > NOW() - INTERVAL '%s minutes'
+                AND status = 'active'
+                ORDER BY created_at DESC 
+                LIMIT 1
+            """, (entity_type, entity_value, INCIDENT_COOLDOWN_MINUTES))
+            return cur.fetchone()
+
+    def find_recent_incident_by_mitre(self, mitre_technique_id: str) -> Optional[Dict]:
+        """Find recent incident with same MITRE technique within cooldown window."""
+        conn = self._get_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Find incidents via fingerprints with same MITRE technique
+            cur.execute("""
+                SELECT i.* FROM incidents i
+                JOIN fingerprints f ON f.mitre_technique_id = %s
+                WHERE i.created_at > NOW() - INTERVAL '%s minutes'
+                AND i.status = 'active'
+                ORDER BY i.created_at DESC
+                LIMIT 1
+            """, (mitre_technique_id, INCIDENT_COOLDOWN_MINUTES))
+            return cur.fetchone()
 
 
 class EntityExtractor:
@@ -548,14 +600,42 @@ class CorrelationEngine:
 
         related_event_ids = [re["event_id"] for re in unique_related[:50]]
         
-        # Determine incident management
-        if not related_event_ids:
-            # No related events - create new incident
-            incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
-            severity = event.get("severity", "low")
-            confidence = 0.3
-            attack_stage = "Initial Access" if event.get("mitre_attack") else "Unknown"
-        else:
+        # FIRST: Find related events from database (proper correlation)
+        related_events = []
+        all_related_entities = defaultdict(set)
+        
+        # Search for each entity type to find related events
+        for entity_type, entity_values in entities.items():
+            for entity_value in entity_values:
+                if not entity_value:
+                    continue
+                    
+                # Index this entity for future correlations
+                self.db.index_entity(entity_type, entity_value, event_id, timestamp)
+                
+                # Find related events (excluding current event)
+                matches = self.db.find_related_events(entity_type, entity_value)
+                for match in matches:
+                    if match["event_id"] != event_id:  # Don't include self
+                        related_events.append(match)
+                        all_related_entities[entity_type].add(match["entity_value"])
+
+        # Deduplicate related events - this is the key correlation step
+        seen_events = set()
+        unique_related = []
+        for re in related_events:
+            if re["event_id"] not in seen_events:
+                seen_events.add(re["event_id"])
+                unique_related.append(re)
+
+        related_event_ids = [re["event_id"] for re in unique_related[:50]]
+        
+        # NOW: After finding related events, check if we should link to existing incident
+        # OR create new one based on the correlation
+        existing_recent_incident = None
+        
+        # If we have many related events, group them into existing or new incident
+        if related_event_ids:
             # Has related events - check if they belong to existing incident
             existing_incidents = set()
             for re in unique_related[:20]:
@@ -565,9 +645,11 @@ class CorrelationEngine:
             if existing_incidents:
                 # Link to existing incident
                 incident_id = list(existing_incidents)[0]
+                logger.info(f"Linked event {event_id} to existing incident {incident_id} via {len(related_event_ids)} related events")
             else:
                 # Create new incident for this group
                 incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
+                logger.info(f"Created new incident {incident_id} from {len(related_event_ids)} correlated events")
             
             # Aggregate severity from all related events
             severity = self._aggregate_severity(event, unique_related)
@@ -579,6 +661,55 @@ class CorrelationEngine:
                 techniques.append(event["mitre_attack"]["technique_id"])
             
             attack_stage, _ = self.attack_chain_builder.calculate_chain_progress(techniques)
+            
+        elif not related_event_ids:
+            # No related events - check for existing recent incident within cooldown for deduplication
+            # But ONLY if this is truly a new attack, not related to anything
+            
+            # Check by source IP
+            src_ips = entities.get("src_ip", [])
+            for src_ip in src_ips:
+                if src_ip:
+                    recent = self.db.find_recent_incident_for_entity("src_ips", f'["{src_ip}"]')
+                    if recent:
+                        existing_recent_incident = recent
+                        logger.info(f"Found recent incident {recent['incident_id']} for src_ip {src_ip} - reusing")
+                        break
+            
+            # If no match by IP, check by username
+            if not existing_recent_incident:
+                usernames = entities.get("username", [])
+                for username in usernames:
+                    if username:
+                        recent = self.db.find_recent_incident_for_entity("usernames", f'["{username}"]')
+                        if recent:
+                            existing_recent_incident = recent
+                            logger.info(f"Found recent incident {recent['incident_id']} for username {username} - reusing")
+                            break
+            
+            # If still no match, check by MITRE technique
+            if not existing_recent_incident:
+                mitre_tech = event.get("mitre_attack", {}).get("technique_id") if isinstance(event.get("mitre_attack"), dict) else None
+                if mitre_tech:
+                    recent = self.db.find_recent_incident_by_mitre(mitre_tech)
+                    if recent:
+                        existing_recent_incident = recent
+                        logger.info(f"Found recent incident {recent['incident_id']} for MITRE {mitre_tech} - reusing")
+            
+            if existing_recent_incident:
+                # Use existing recent incident (deduplication for similar attacks)
+                incident_id = existing_recent_incident["incident_id"]
+                severity = existing_recent_incident["severity"]
+                confidence = min(0.8, existing_recent_incident.get("confidence_score", 0.5) + 0.1)
+                attack_stage = existing_recent_incident.get("attack_chain_stage", "Unknown")
+                logger.info(f"Reusing existing incident {incident_id} (cooldown deduplication)")
+            else:
+                # Create new incident for this unique event
+                incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
+                severity = event.get("severity", "low")
+                confidence = 0.3
+                attack_stage = "Initial Access" if event.get("mitre_attack") else "Unknown"
+                logger.info(f"Created new unique incident {incident_id}")
 
         # Build incident data
         linked_entities = {
@@ -637,6 +768,10 @@ class CorrelationEngine:
 
         # Store incident
         self.db.store_incident(incident_data)
+
+        # KEY FIX: Link ALL matching entities in the index to this incident
+        # This enables future events to find related events via incident_id
+        self.db.link_entities_to_incident(incident_id, linked_entities, event_id)
 
         # Link this event to incident
         for entity_type, entity_values in entities.items():

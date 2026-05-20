@@ -1,4 +1,14 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+
+const styleSheet = document.createElement("style");
+styleSheet.innerText = `
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+`;
+document.head.appendChild(styleSheet);
+
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -261,6 +271,7 @@ function App() {
   const [stats, setStats] = useState({ total: 0, active: 0, critical: 0, high: 0, medium: 0, low: 0, by_stage: [] });
   const [incidents, setIncidents] = useState([]);
   const [playbooks, setPlaybooks] = useState([]);
+  const [incidentPlaybooks, setIncidentPlaybooks] = useState([]);
   const [riskSummary, setRiskSummary] = useState([]);
   const [fingerprints, setFingerprints] = useState([]);
   const [mitreMappings, setMitreMappings] = useState([]);
@@ -270,19 +281,30 @@ function App() {
   
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [incidentGraph, setIncidentGraph] = useState(null);
+  const [selectedPlaybook, setSelectedPlaybook] = useState(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [graphFullscreen, setGraphFullscreen] = useState(false);
+  const [graphIncidentId, setGraphIncidentId] = useState(null);
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [showLegend, setShowLegend] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
   
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
+  const [playbookSearchTerm, setPlaybookSearchTerm] = useState('');
+  const [playbookSeverityFilter, setPlaybookSeverityFilter] = useState('all');
+  const [playbookStatusFilter, setPlaybookStatusFilter] = useState('all');
 
   const cyRef = useRef(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const [statsRes, incidentsRes, playbooksRes, riskRes, alertsRes, mitreRes, queueRes, osRes] = await Promise.all([
+      const [statsRes, incidentsRes, playbooksRes, incidentPlaybooksRes, riskRes, alertsRes, mitreRes, queueRes, osRes] = await Promise.all([
         fetch(`${API_BASE}/incident-stats`).then(r => r.json()).catch(() => ({ total: 0, active: 0, by_severity: {}, by_stage: [] })),
         fetch(`${API_BASE}/incidents`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/playbooks`).then(r => r.json()).catch(() => []),
+        fetch(`${API_BASE}/incident-playbooks`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/risk-summary`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/alerts`).then(r => r.json()).catch(() => []),
         fetch(`${API_BASE}/mitre`).then(r => r.json()).catch(() => []),
@@ -304,6 +326,7 @@ function App() {
       
       setIncidents(incidentsRes);
       setPlaybooks(playbooksRes);
+      setIncidentPlaybooks(incidentPlaybooksRes);
       setRiskSummary(riskRes);
       setFingerprints(alertsRes);
       setMitreMappings(mitreRes);
@@ -421,24 +444,72 @@ function App() {
     if (!incidentGraph) return [];
     const elements = [];
     
-    (incidentGraph.graph?.nodes || []).forEach(node => {
+    const nodeColors = {
+      incident: '#ef4444',
+      source_ip: '#f97316',
+      destination_ip: '#0ea5e9',
+      user: '#8b5cf6',
+      hostname: '#22c55e',
+      process: '#f59e0b',
+      mitre_stage: '#6366f1',
+    };
+    
+    const nodeShapes = {
+      incident: 'ellipse',
+      source_ip: 'diamond',
+      destination_ip: 'round-rectangle',
+      user: 'ellipse',
+      hostname: 'round-rectangle',
+      process: 'barrel',
+      mitre_stage: 'round-rectangle',
+    };
+    
+    (incidentGraph.nodes || []).forEach(node => {
+      const color = nodeColors[node.type] || '#6366f1';
+      const shape = nodeShapes[node.type] || 'ellipse';
       elements.push({
         data: {
           id: node.id,
           label: node.label,
           type: node.type,
           severity: node.severity,
+          metadata: node.metadata || {},
+        },
+        style: {
+          'background-color': color,
+          'shape': shape,
+          'width': node.type === 'incident' ? 80 : 50,
+          'height': node.type === 'incident' ? 50 : 35,
         },
       });
     });
     
-    (incidentGraph.graph?.edges || []).forEach(edge => {
+    const edgeColors = {
+      attack_origin: '#ef4444',
+      target: '#f97316',
+      credential_access: '#8b5cf6',
+      execution: '#f59e0b',
+      affects: '#22c55e',
+      attack_progression: '#6366f1',
+      progression: '#6366f1',
+    };
+    
+    (incidentGraph.edges || []).forEach(edge => {
+      const color = edgeColors[edge.type] || '#334155';
+      const width = edge.type === 'attack_origin' ? 4 : 2;
       elements.push({
         data: {
           id: `${edge.from}-${edge.to}`,
           source: edge.from,
           target: edge.to,
-          label: edge.type,
+          label: edge.label,
+          edgeType: edge.type,
+        },
+        style: {
+          'line-color': color,
+          'target-arrow-color': color,
+          'width': width,
+          'curve-style': 'bezier',
         },
       });
     });
@@ -464,8 +535,8 @@ function App() {
       <div style={styles.grid}>
         <MetricCard title="Total Incidents" value={stats.total} icon="🚨" color={COLORS.primary} />
         <MetricCard title="Active Incidents" value={stats.active} icon="⚡" color={COLORS.warning} />
-        <MetricCard title="Fingerprints" value={fingerprints.length} icon="👆" color={COLORS.secondary} />
-        <MetricCard title="Playbooks" value={playbooks.length} icon="📋" color={COLORS.success} />
+        <MetricCard title="Correlated Events" value={fingerprints.length} icon="👆" color={COLORS.secondary} />
+        <MetricCard title="Unique Playbooks" value={incidentPlaybooks.length} icon="📋" color={COLORS.success} />
         <MetricCard title="MITRE Mappings" value={mitreMappings.length} icon="🎯" color="#f97316" />
         <MetricCard title="Queue Size" value={queueSize} icon="📬" color="#8b5cf6" />
         <MetricCard title="OpenSearch Alerts" value={opensearchCount} icon="🔍" color="#06b6d4" />
@@ -657,133 +728,562 @@ function App() {
     </div>
   );
 
-  const renderGraph = () => (
-    <div>
-      <div style={styles.card}>
-        <div style={styles.cardTitle}>Interactive Attack Chain Graph</div>
-        <p style={{ color: COLORS.textMuted, marginBottom: '16px' }}>
-          Select an incident from the Incidents page to view its correlation graph.
-        </p>
-        
-        {selectedIncident ? (
-          <div>
-            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center' }}>
-              <span><strong>Selected:</strong> {selectedIncident.incident_id}</span>
-              <span style={{ 
-                ...styles.badge, 
-                backgroundColor: (severityColors[selectedIncident.severity] || '#6366f1') + '20',
-                color: severityColors[selectedIncident.severity] || '#6366f1',
-              }}>
-                {selectedIncident.severity?.toUpperCase()}
-              </span>
-            </div>
-            
-            <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: '12px', overflow: 'hidden' }}>
-              {incidentGraph && incidentGraph.graph?.nodes?.length > 0 ? (
-                <CytoscapeComponent
-                  elements={getGraphElements()}
-                  style={cyStyle}
-                  cy={(cy) => { cyRef.current = cy; }}
-                  layout={cyLayout}
-                  stylesheet={[
-                    { selector: 'node', style: { 
-                      'background-color': '#0ea5e9', 
-                      'label': 'data(label)',
-                      'color': '#e2e8f0',
-                      'font-size': '12px',
-                      'text-valign': 'center',
-                      'text-halign': 'bottom',
-                    }},
-                    { selector: 'edge', style: { 
-                      'width': 2,
-                      'line-color': '#334155',
-                      'target-arrow-color': '#334155',
-                      'target-arrow-shape': 'triangle',
-                      'curve-style': 'bezier',
-                    }},
-                  ]}
-                />
-              ) : (
-                <div style={{ padding: '100px', textAlign: 'center', color: COLORS.textMuted }}>
-                  No graph data available for this incident
-                </div>
-              )}
-            </div>
-
-            {incidentGraph?.timeline && (
-              <div style={{ marginTop: '20px' }}>
-                <div style={styles.cardTitle}>Event Timeline</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {incidentGraph.timeline.map((t, idx) => (
-                    <div key={idx} style={{ 
-                      padding: '12px', 
-                      backgroundColor: COLORS.dark, 
-                      borderRadius: '8px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}>
-                      <span style={{ color: t.type === 'current_event' ? COLORS.primary : COLORS.textMuted }}>
-                        {t.type === 'current_event' ? '● Current Event' : '○ Related Event'}
-                      </span>
-                      <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{t.event_id}</span>
-                      <span style={{ color: COLORS.textMuted, fontSize: '12px' }}>{new Date(t.timestamp).toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
+  const renderGraph = () => {
+    const activeIncident = selectedIncident || (graphIncidentId ? incidents.find(i => i.incident_id === graphIncidentId) : null);
+    
+    const handleBack = () => {
+      setSelectedIncident(null);
+      setGraphIncidentId(null);
+      setIncidentGraph(null);
+    };
+    
+    const nodeTypeInfo = {
+      incident: { color: '#ef4444', label: 'Incident', shape: 'ellipse', desc: 'Security incident with correlated events' },
+      source_ip: { color: '#f97316', label: 'Attacker IP', shape: 'diamond', desc: 'External threat actor source' },
+      destination_ip: { color: '#0ea5e9', label: 'Target IP', shape: 'round-rectangle', desc: 'Internal target system' },
+      user: { color: '#8b5cf6', label: 'User/Account', shape: 'ellipse', desc: 'Compromised user account' },
+      hostname: { color: '#22c55e', label: 'Host/System', shape: 'round-rectangle', desc: 'Affected endpoint/server' },
+      process: { color: '#f59e0b', label: 'Process', shape: 'barrel', desc: 'Suspicious process execution' },
+      mitre_stage: { color: '#6366f1', label: 'MITRE Stage', shape: 'round-rectangle', desc: 'Attack chain progression' },
+    };
+    
+    const edgeTypeInfo = {
+      attack_origin: { color: '#ef4444', label: 'Attacking From', desc: 'Origin of attack' },
+      target: { color: '#0ea5e9', label: 'Target', desc: 'Target system' },
+      credential_access: { color: '#8b5cf6', label: 'Compromised', desc: 'Credential access' },
+      execution: { color: '#f59e0b', label: 'Executed', desc: 'Process execution' },
+      affects: { color: '#22c55e', label: 'Affected', desc: 'System affected' },
+      attack_progression: { color: '#6366f1', label: 'Progression', desc: 'Attack chain progress' },
+    };
+    
+    return (
+      <div style={graphFullscreen ? {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: COLORS.darker,
+        zIndex: 2000,
+        padding: '20px',
+        overflow: 'auto',
+      } : {}}>
+        <div style={styles.card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={styles.cardTitle}>🕸️ Attack Chain Investigation Graph</div>
+            {activeIncident && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button 
+                  style={{ ...styles.button, backgroundColor: showLegend ? COLORS.primary : COLORS.border, color: 'white', padding: '6px 12px', fontSize: '11px' }}
+                  onClick={() => setShowLegend(!showLegend)}
+                >
+                  {showLegend ? '◉' : '○'} Legend
+                </button>
+                <button 
+                  style={{ ...styles.button, backgroundColor: showLabels ? COLORS.primary : COLORS.border, color: 'white', padding: '6px 12px', fontSize: '11px' }}
+                  onClick={() => setShowLabels(!showLabels)}
+                >
+                  {showLabels ? '◉' : '○'} Labels
+                </button>
+                <button 
+                  style={{ ...styles.button, backgroundColor: COLORS.border, color: COLORS.text, padding: '6px 12px', fontSize: '12px' }}
+                  onClick={handleBack}
+                >
+                  ← Back
+                </button>
+                <button 
+                  style={{ ...styles.button, backgroundColor: COLORS.secondary, color: 'white', padding: '6px 12px', fontSize: '12px' }}
+                  onClick={() => setGraphFullscreen(!graphFullscreen)}
+                >
+                  {graphFullscreen ? '⊠ Exit Fullscreen' : '⛶ Fullscreen'}
+                </button>
               </div>
             )}
           </div>
-        ) : (
-          <div style={{ padding: '60px', textAlign: 'center', color: COLORS.textMuted }}>
-            Select an incident from the Incidents page to view its attack chain graph
+          
+          {!activeIncident ? (
+            <div style={{ padding: '60px', textAlign: 'center', color: COLORS.textMuted }}>
+              Select an incident from the Incidents or Playbooks page to view its correlation graph.
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ backgroundColor: COLORS.dark, padding: '8px 16px', borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
+                  <span style={{ color: COLORS.textMuted, fontSize: '11px' }}>INCIDENT</span>
+                  <div style={{ fontWeight: '700', fontSize: '16px', color: COLORS.primary }}>{activeIncident.incident_id}</div>
+                </div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '8px 16px', borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
+                  <span style={{ color: COLORS.textMuted, fontSize: '11px' }}>SEVERITY</span>
+                  <div style={{ fontWeight: '700', fontSize: '14px', color: severityColors[activeIncident.severity] }}>{activeIncident.severity?.toUpperCase()}</div>
+                </div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '8px 16px', borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
+                  <span style={{ color: COLORS.textMuted, fontSize: '11px' }}>ATTACK STAGE</span>
+                  <div style={{ fontWeight: '700', fontSize: '14px' }}>{activeIncident.attack_chain_stage || 'Unknown'}</div>
+                </div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '8px 16px', borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
+                  <span style={{ color: COLORS.textMuted, fontSize: '11px' }}>CONFIDENCE</span>
+                  <div style={{ fontWeight: '700', fontSize: '14px' }}>{((activeIncident.confidence_score || 0) * 100).toFixed(0)}%</div>
+                </div>
+                {incidentGraph?.entity_count && (
+                  <div style={{ backgroundColor: COLORS.dark, padding: '8px 16px', borderRadius: '8px', border: `1px solid ${COLORS.border}` }}>
+                    <span style={{ color: COLORS.textMuted, fontSize: '11px' }}>ENTITIES</span>
+                    <div style={{ fontWeight: '700', fontSize: '14px' }}>
+                      {Object.values(incidentGraph.entity_count).reduce((a,b) => a+b, 0)}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '20px' }}>
+                <div style={{ flex: 1 }}>
+                  {graphLoading ? (
+                    <div style={{ 
+                      height: '450px', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      flexDirection: 'column',
+                      gap: '16px',
+                      color: COLORS.textMuted,
+                    }}>
+                      <div style={{ 
+                        width: '40px', 
+                        height: '40px', 
+                        border: '3px solid ' + COLORS.border, 
+                    borderTop: '3px solid ' + COLORS.primary, 
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite',
+                  }} />
+                  Loading graph data...
+                </div>
+              ) : (
+                <div style={{ border: `1px solid ${COLORS.border}`, borderRadius: '12px', overflow: 'hidden' }}>
+                  {incidentGraph && (incidentGraph.nodes?.length || incidentGraph.graph?.nodes?.length) > 0 ? (
+                    <CytoscapeComponent
+                      elements={getGraphElements()}
+                      style={{
+                        ...cyStyle,
+                        height: graphFullscreen ? 'calc(100vh - 200px)' : '400px',
+                      }}
+                      cy={(cy) => { 
+                        cyRef.current = cy;
+                        cy.on('tap', 'node', function(evt){
+                          const node = evt.target;
+                          const nodeData = node.data();
+                          setSelectedNode({
+                            id: nodeData.id,
+                            label: nodeData.label,
+                            type: nodeData.type,
+                            severity: nodeData.severity,
+                            metadata: nodeData.metadata || {},
+                          });
+                        });
+                      }}
+                      layout={{
+                        name: 'cose',
+                        animate: true,
+                        padding: 30,
+                        nodeSpacing: 80,
+                        edgeLength: 100,
+                        idealEdgeLength: 100,
+                        nodeRepulsion: 4000,
+                      }}
+                      stylesheet={[
+                        { selector: 'node', style: { 
+                          'background-color': 'data(background-color)', 
+                          'label': showLabels ? 'data(label)' : '',
+                          'color': '#e2e8f0',
+                          'font-size': showLabels ? '11px' : '0px',
+                          'text-valign': 'bottom',
+                          'text-halign': 'center',
+                          'text-margin-y': 8,
+                          'width': 'data(width)',
+                          'height': 'data(height)',
+                          'text-wrap': 'wrap',
+                          'text-max-width': '80px',
+                        }},
+                        { selector: 'edge', style: { 
+                          'width': 2,
+                          'line-color': 'data(line-color)',
+                          'target-arrow-color': 'data(line-color)',
+                          'target-arrow-shape': 'triangle',
+                          'target-arrow-size': 1.5,
+                          'curve-style': 'bezier',
+                          'opacity': 0.8,
+                        }},
+                      ]}
+                    />
+                  ) : (
+                    <div style={{ padding: '100px', textAlign: 'center', color: COLORS.textMuted }}>
+                      No graph data available for this incident
+                    </div>
+                  )}
+
+                  {selectedNode && (
+                    <div style={{ marginTop: '20px', padding: '16px', backgroundColor: COLORS.dark, borderRadius: '12px', border: `1px solid ${COLORS.primary}` }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                        <div style={{ fontWeight: '600', color: COLORS.primary }}>Node Details</div>
+                        <button style={{ ...styles.button, backgroundColor: COLORS.border, color: COLORS.text, padding: '4px 8px', fontSize: '11px' }} onClick={() => setSelectedNode(null)}>✕ Close</button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '13px' }}>
+                        <div><span style={{ color: COLORS.textMuted }}>Type:</span></div>
+                        <div style={{ textTransform: 'uppercase' }}>{selectedNode.type}</div>
+                        <div><span style={{ color: COLORS.textMuted }}>ID:</span></div>
+                        <div style={{ fontFamily: 'monospace' }}>{selectedNode.id}</div>
+                        <div><span style={{ color: COLORS.textMuted }}>Label:</span></div>
+                        <div>{selectedNode.label}</div>
+                        <div><span style={{ color: COLORS.textMuted }}>Severity:</span></div>
+                        <div style={{ color: severityColors[selectedNode.severity] || COLORS.text }}>{selectedNode.severity || 'N/A'}</div>
+                        {selectedNode.metadata && Object.keys(selectedNode.metadata).length > 0 && (
+                          <>
+                            <div style={{ color: COLORS.textMuted, gridColumn: '1 / -1', marginTop: '8px' }}>Metadata:</div>
+                            {Object.entries(selectedNode.metadata).map(([k, v]) => (
+                              <div key={k} style={{ gridColumn: '1 / -1', display: 'flex', gap: '8px', fontSize: '12px' }}>
+                                <span style={{ color: COLORS.textMuted }}>{k}:</span>
+                                <span style={{ fontFamily: 'monospace' }}>{String(v)}</span>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {showLegend && incidentGraph?.nodes?.length > 0 && (
+                  <div style={{ 
+                    position: 'absolute', 
+                    top: '80px', 
+                    right: '40px', 
+                    width: '200px',
+                    backgroundColor: COLORS.card, 
+                    borderRadius: '12px', 
+                    padding: '16px',
+                    border: `1px solid ${COLORS.border}`,
+                    zIndex: 100,
+                  }}>
+                    <div style={{ fontWeight: '600', marginBottom: '12px', fontSize: '13px' }}>📊 Graph Legend</div>
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: '11px', color: COLORS.textMuted, marginBottom: '8px' }}>NODE TYPES</div>
+                      {Object.entries(nodeTypeInfo).map(([key, info]) => (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', fontSize: '11px' }}>
+                          <div style={{ width: '14px', height: '14px', borderRadius: key === 'source_ip' ? '2px' : '50%', backgroundColor: info.color }}></div>
+                          <span>{info.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: COLORS.textMuted, marginBottom: '8px' }}>EDGE RELATIONSHIPS</div>
+                      {Object.entries(edgeTypeInfo).map(([key, info]) => (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', fontSize: '11px' }}>
+                          <div style={{ width: '20px', height: '2px', backgroundColor: info.color }}></div>
+                          <span>{info.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: '12px', fontSize: '10px', color: COLORS.textMuted, borderTop: `1px solid ${COLORS.border}`, paddingTop: '8px' }}>
+                      Click nodes for details • Drag to pan • Scroll to zoom
+                    </div>
+                  </div>
+                )}
+                </div>
+              )}
+
+                {incidentGraph?.timeline && (
+                <div style={{ marginTop: '20px' }}>
+                  <div style={{ ...styles.cardTitle, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    📜 Event Timeline ({incidentGraph.timeline?.length || 0} events)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {incidentGraph.timeline.slice(0, 8).map((t, idx) => (
+                      <div key={idx} style={{ 
+                        padding: '12px', 
+                        backgroundColor: COLORS.dark, 
+                        borderRadius: '8px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}>
+                        <span style={{ color: t.type === 'current_event' ? COLORS.primary : COLORS.textMuted }}>
+                          {t.type === 'current_event' ? '● Current Event' : '○ Related Event'}
+                        </span>
+                        <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{t.event_id}</span>
+                        <span style={{ color: COLORS.textMuted, fontSize: '12px' }}>{new Date(t.timestamp).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderPlaybooks = () => {
+    const uniquePlaybooks = incidentPlaybooks.length;
+    const activeIncidents = incidents.filter(i => i.status === 'active').length;
+    const resolvedIncidents = incidents.filter(i => i.status === 'resolved').length;
+    
+    const filteredPlaybooks = incidentPlaybooks.filter(p => {
+      const matchesSearch = playbookSearchTerm === '' || 
+        p.incident_id?.toLowerCase().includes(playbookSearchTerm.toLowerCase()) ||
+        p.attack_chain_stage?.toLowerCase().includes(playbookSearchTerm.toLowerCase()) ||
+        p.mitigation_status?.toLowerCase().includes(playbookSearchTerm.toLowerCase());
+      const matchesSeverity = playbookSeverityFilter === 'all' || p.severity === playbookSeverityFilter;
+      const matchesStatus = playbookStatusFilter === 'all' || p.mitigation_status === playbookStatusFilter;
+      return matchesSearch && matchesSeverity && matchesStatus;
+    });
+    
+    return (
+      <div>
+        <div style={styles.grid}>
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Correlated Incidents</div>
+            <div style={{ ...styles.metricValue, color: COLORS.primary }}>{stats.total}</div>
+            <div style={{ ...styles.metricChange, color: COLORS.textMuted }}>with {incidentPlaybooks.reduce((sum, p) => sum + (p.event_count || 0), 0)} total events</div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Unique Playbooks</div>
+            <div style={{ ...styles.metricValue, color: COLORS.success }}>{uniquePlaybooks}</div>
+            <div style={{ ...styles.metricChange, color: COLORS.textMuted }}>1:1 with incidents</div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Active Incidents</div>
+            <div style={{ ...styles.metricValue, color: COLORS.warning }}>{activeIncidents}</div>
+            <div style={{ ...styles.metricChange, color: COLORS.textMuted }}>requiring response</div>
+          </div>
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Resolved</div>
+            <div style={{ ...styles.metricValue, color: COLORS.success }}>{resolvedIncidents}</div>
+            <div style={{ ...styles.metricChange, color: COLORS.textMuted }}>mitigated</div>
+          </div>
+        </div>
+
+        <div style={styles.card}>
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '20px' }}>
+            <input 
+              style={{ ...styles.input, maxWidth: '250px' }}
+              placeholder="Search incident ID, stage, status..."
+              value={playbookSearchTerm}
+              onChange={(e) => setPlaybookSearchTerm(e.target.value)}
+            />
+            <select 
+              style={{ ...styles.select, width: '140px' }}
+              value={playbookSeverityFilter}
+              onChange={(e) => setPlaybookSeverityFilter(e.target.value)}
+            >
+              <option value="all">All Severities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+              <option value="info">Info</option>
+            </select>
+            <select 
+              style={{ ...styles.select, width: '150px' }}
+              value={playbookStatusFilter}
+              onChange={(e) => setPlaybookStatusFilter(e.target.value)}
+            >
+              <option value="all">All Statuses</option>
+              <option value="escalated">Escalated</option>
+              <option value="investigating">Investigating</option>
+              <option value="pending">Pending</option>
+              <option value="resolved">Resolved</option>
+            </select>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
+              <button style={{ ...styles.button, backgroundColor: COLORS.primary, color: 'white' }} onClick={() => downloadData(filteredPlaybooks, 'incident_playbooks', 'csv')}>Export CSV</button>
+              <button style={{ ...styles.button, backgroundColor: COLORS.secondary, color: 'white' }} onClick={() => downloadData(filteredPlaybooks, 'incident_playbooks', 'json')}>Export JSON</button>
+            </div>
+          </div>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '16px' }}>
+            {filteredPlaybooks.map(p => (
+              <div 
+                key={p.id} 
+                style={{ 
+                  backgroundColor: COLORS.dark, 
+                  borderRadius: '12px', 
+                  padding: '16px',
+                  border: `1px solid ${COLORS.border}`,
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+                onClick={() => setSelectedPlaybook(p)}
+                onMouseOver={(e) => e.currentTarget.style.borderColor = COLORS.primary}
+                onMouseOut={(e) => e.currentTarget.style.borderColor = COLORS.border}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px' }}>
+                  <div>
+                    <span style={{ fontWeight: '600', fontSize: '14px' }}>{p.incident_id}</span>
+                    <div style={{ fontSize: '11px', color: COLORS.textMuted, marginTop: '2px' }}>
+                      {p.event_count} correlated events
+                    </div>
+                  </div>
+                  <span style={{ 
+                    ...styles.badge, 
+                    backgroundColor: (severityColors[p.severity] || '#6366f1') + '20',
+                    color: severityColors[p.severity] || '#6366f1',
+                  }}>
+                    {p.severity?.toUpperCase() || 'MEDIUM'}
+                  </span>
+                </div>
+                <p style={{ color: COLORS.textMuted, fontSize: '13px', marginBottom: '12px', lineHeight: '1.5' }}>
+                  {p.analyst_guidance?.substring(0, 180)}...
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: COLORS.textMuted }}>
+                  <span>Stage: {p.attack_chain_stage || 'Unknown'}</span>
+                  <span>Confidence: {((p.confidence_score || 0) * 100).toFixed(0)}%</span>
+                </div>
+                <div style={{ fontSize: '11px', color: COLORS.textMuted, marginTop: '8px' }}>
+                  Status: {p.mitigation_status}
+                </div>
+              </div>
+            ))}
+          </div>
+          {filteredPlaybooks.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '40px', color: COLORS.textMuted }}>
+              No playbooks found matching filters
+            </div>
+          )}
+        </div>
+
+        {selectedPlaybook && (
+          <div style={styles.modal} onClick={() => setSelectedPlaybook(null)}>
+            <div style={{ ...styles.modalContent, maxWidth: '700px' }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: '20px' }}>{selectedPlaybook.incident_id}</h2>
+                  <div style={{ fontSize: '13px', color: COLORS.textMuted, marginTop: '4px' }}>
+                    Created: {new Date(selectedPlaybook.created_at).toLocaleString()}
+                  </div>
+                </div>
+                <button 
+                  style={{ ...styles.button, backgroundColor: COLORS.border, color: COLORS.text }}
+                  onClick={() => setSelectedPlaybook(null)}
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                <div style={{ backgroundColor: COLORS.dark, padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: COLORS.textMuted, marginBottom: '4px' }}>SEVERITY</div>
+                  <span style={{ 
+                    ...styles.badge, 
+                    backgroundColor: (severityColors[selectedPlaybook.severity] || '#6366f1') + '20',
+                    color: severityColors[selectedPlaybook.severity] || '#6366f1',
+                  }}>
+                    {selectedPlaybook.severity?.toUpperCase() || 'MEDIUM'}
+                  </span>
+                </div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: COLORS.textMuted, marginBottom: '4px' }}>STATUS</div>
+                  <span style={{ color: COLORS.text }}>{selectedPlaybook.mitigation_status || 'pending'}</span>
+                </div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: COLORS.textMuted, marginBottom: '4px' }}>ATTACK STAGE</div>
+                  <span style={{ color: COLORS.text }}>{selectedPlaybook.attack_chain_stage || 'Unknown'}</span>
+                </div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '12px', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '11px', color: COLORS.textMuted, marginBottom: '4px' }}>CONFIDENCE</div>
+                  <span style={{ color: COLORS.text }}>{((selectedPlaybook.confidence_score || 0) * 100).toFixed(0)}%</span>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ fontSize: '12px', color: COLORS.textMuted, marginBottom: '8px', fontWeight: '600' }}>CORRELATION DETAILS</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ backgroundColor: COLORS.dark, padding: '12px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '11px', color: COLORS.textMuted }}>Correlated Events</div>
+                    <div style={{ fontSize: '18px', fontWeight: '600', color: COLORS.primary }}>{selectedPlaybook.event_count || 0}</div>
+                  </div>
+                  <div style={{ backgroundColor: COLORS.dark, padding: '12px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '11px', color: COLORS.textMuted }}>Linked Fingerprints</div>
+                    <div style={{ fontSize: '18px', fontWeight: '600', color: COLORS.primary }}>
+                      {selectedPlaybook.linked_fingerprints?.length || 0}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {selectedPlaybook.incident_summary && (
+                <div style={{ marginBottom: '20px' }}>
+                  <div style={{ fontSize: '12px', color: COLORS.textMuted, marginBottom: '8px', fontWeight: '600' }}>INCIDENT SUMMARY (LLM Generated)</div>
+                  <div style={{ backgroundColor: COLORS.dark, padding: '16px', borderRadius: '8px', lineHeight: '1.6' }}>
+                    {selectedPlaybook.incident_summary}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ fontSize: '12px', color: COLORS.textMuted, marginBottom: '8px', fontWeight: '600' }}>ANALYST GUIDANCE</div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '16px', borderRadius: '8px', lineHeight: '1.6' }}>
+                  {selectedPlaybook.analyst_guidance || 'No analyst guidance available'}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ fontSize: '12px', color: COLORS.textMuted, marginBottom: '8px', fontWeight: '600' }}>REMEDIATION STEPS</div>
+                <div style={{ backgroundColor: COLORS.dark, padding: '16px', borderRadius: '8px' }}>
+                  {(selectedPlaybook.remediation_steps || []).map((step, idx) => (
+                    <div key={idx} style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                      <span style={{ color: COLORS.primary, fontWeight: '600' }}>{idx + 1}.</span>
+                      <span style={{ color: COLORS.text }}>{step}</span>
+                    </div>
+                  ))}
+                  {(!selectedPlaybook.remediation_steps || selectedPlaybook.remediation_steps.length === 0) && (
+                    <span style={{ color: COLORS.textMuted }}>No remediation steps defined</span>
+                  )}
+                </div>
+              </div>
+
+              {selectedPlaybook.linked_fingerprints && selectedPlaybook.linked_fingerprints.length > 0 && (
+                <div style={{ marginBottom: '20px' }}>
+                  <div style={{ fontSize: '12px', color: COLORS.textMuted, marginBottom: '8px', fontWeight: '600' }}>LINKED FINGERPRINTS</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                    {selectedPlaybook.linked_fingerprints.map(fp => (
+                      <span key={fp} style={{ 
+                        backgroundColor: COLORS.dark, 
+                        padding: '4px 10px', 
+                        borderRadius: '4px',
+                        fontSize: '12px',
+                        fontFamily: 'monospace'
+                      }}>
+                        FP-{fp}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>
+                <button 
+                  style={{ ...styles.button, backgroundColor: COLORS.primary, color: 'white' }}
+                  onClick={() => downloadData(selectedPlaybook, `playbook-${selectedPlaybook.incident_id}`, 'json')}
+                >
+                  Download JSON
+                </button>
+                <button 
+                  style={{ ...styles.button, backgroundColor: COLORS.secondary, color: 'white' }}
+                  onClick={() => {
+                    const incidentToView = incidents.find(i => i.incident_id === selectedPlaybook.incident_id);
+                    setSelectedPlaybook(null);
+                    setSelectedIncident(incidentToView);
+                    setPage('incidents');
+                  }}
+                >
+                  View Incident
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
-    </div>
-  );
-
-  const renderPlaybooks = () => (
-    <div>
-      <div style={styles.card}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-          <div style={styles.cardTitle}>Response Playbooks ({playbooks.length})</div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button style={{ ...styles.button, backgroundColor: COLORS.primary, color: 'white' }} onClick={() => downloadData(playbooks, 'playbooks', 'csv')}>Export CSV</button>
-            <button style={{ ...styles.button, backgroundColor: COLORS.secondary, color: 'white' }} onClick={() => downloadData(playbooks, 'playbooks', 'json')}>Export JSON</button>
-          </div>
-        </div>
-        
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '16px' }}>
-          {playbooks.slice(0, 30).map(p => (
-            <div key={p.id} style={{ 
-              backgroundColor: COLORS.dark, 
-              borderRadius: '12px', 
-              padding: '16px',
-              border: `1px solid ${COLORS.border}`,
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '12px' }}>
-                <span style={{ fontWeight: '600', fontSize: '14px' }}>Playbook #{p.id}</span>
-                <span style={{ 
-                  ...styles.badge, 
-                  backgroundColor: (riskColors[p.risk_level] || '#6366f1') + '20',
-                  color: riskColors[p.risk_level] || '#6366f1',
-                }}>
-                  {p.risk_level || 'N/A'}
-                </span>
-              </div>
-              <p style={{ color: COLORS.textMuted, fontSize: '13px', marginBottom: '12px', lineHeight: '1.5' }}>
-                {p.analyst_guidance?.substring(0, 150)}...
-              </p>
-              <div style={{ fontSize: '12px', color: COLORS.textMuted }}>
-                Fingerprint ID: {p.fingerprint_id}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const renderHealth = () => (
     <div>
@@ -825,7 +1325,7 @@ function App() {
           <tbody>
             <tr><td style={styles.td}>incidents</td><td style={styles.td}>{stats.total}</td><td style={styles.td}><span style={{color: COLORS.success}}>✓</span></td></tr>
             <tr><td style={styles.td}>fingerprints</td><td style={styles.td}>{fingerprints.length}</td><td style={styles.td}><span style={{color: COLORS.success}}>✓</span></td></tr>
-            <tr><td style={styles.td}>playbooks</td><td style={styles.td}>{playbooks.length}</td><td style={styles.td}><span style={{color: COLORS.success}}>✓</span></td></tr>
+            <tr><td style={styles.td}>incident_playbooks</td><td style={styles.td}>{incidentPlaybooks.length}</td><td style={styles.td}><span style={{color: COLORS.success}}>✓</span></td></tr>
             <tr><td style={styles.td}>mitre_mappings</td><td style={styles.td}>{mitreMappings.length}</td><td style={styles.td}><span style={{color: COLORS.success}}>✓</span></td></tr>
             <tr><td style={styles.td}>risk_scores</td><td style={styles.td}>{riskSummary.reduce((a, b) => a + (b.count || 0), 0)}</td><td style={styles.td}><span style={{color: COLORS.success}}>✓</span></td></tr>
           </tbody>
@@ -969,8 +1469,13 @@ function App() {
               <button 
                 style={{ ...styles.button, backgroundColor: COLORS.primary, color: 'white' }}
                 onClick={() => {
+                  const incidentToView = selectedIncident;
+                  setSelectedIncident(null);
+                  setSelectedPlaybook(null);
+                  setGraphIncidentId(incidentToView.incident_id);
+                  setGraphLoading(true);
                   setPage('graph');
-                  setSelectedIncident(selectedIncident);
+                  fetchIncidentGraph(incidentToView.incident_id).finally(() => setGraphLoading(false));
                 }}
               >
                 View Graph
